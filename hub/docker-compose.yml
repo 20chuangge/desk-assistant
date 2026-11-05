@@ -1,0 +1,31 @@
+services:
+  desk-hub:
+    build:
+      context: ..
+      dockerfile: hub/Dockerfile
+    image: desk-hub:latest
+    container_name: desk-hub
+    restart: unless-stopped
+    ports:
+      # 只给本机反代用就绑 127.0.0.1:4390；要在局域网直连就改成 4390:4390
+      - "127.0.0.1:4390:4390"
+    environment:
+      TZ: Asia/Shanghai
+      # 需要模型时在这里给 key（也可以在界面里填，存进容器内的 data/secrets.json）
+      # ASSIST_API_KEY: sk-...
+      # ASSIST_MODEL_PROVIDER: openai
+      # ASSIST_BASE_URL: https://api.deepseek.com/v1
+      # ASSIST_MODEL: deepseek-flash
+      ASSIST_ALLOW_REMOTE: "1"
+      HOST: 0.0.0.0
+    volumes:
+      - desk-data:/app/data
+      - desk-workspace:/app/workspace
+      # 想用你自己的技能库/配置就挂进来
+      # - ../skills:/app/skills:ro
+    # 浏览器下载/生成的文件都在 workspace 里，按需加内存
+    shm_size: "512m"
+
+volumes:
+  desk-data:
+  desk-workspace:

@@ -1,0 +1,1200 @@
+/**
+ * tools.mjs - what a bot can actually do.
+ *
+ * Every tool is { name, description, parameters (JSON Schema), risk, run(args, ctx) }.
+ *
+ * `risk` is either a string or a function `(args) => {risk, reason}`. The function
+ * form exists because context changes everything: writing notes/plan.md is LOW,
+ * writing ../outside-note.md is HIGH. The registry declares the *minimum* risk;
+ * approvals.mjs applies the policy on top and can only ever escalate.
+ *
+ * run() gets a context:
+ *   { bot, config, workspaceDir, turnId, unattended, signal, emit, depth }
+ * and returns a JSON-serializable object. Throwing an Error with .code marks the
+ * call as failed; the agent turns it into a tool result the model can read.
+ */
+
+import path from 'node:path';
+import fsp from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { RISK } from './approvals.mjs';
+import { getBrowserManager } from './browser.mjs';
+
+const MAX_SHELL_OUTPUT = 20000;
+const MAX_FILE_READ = 200000;
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+export function toolError(code, message, details) {
+  const err = new Error(message);
+  err.code = code;
+  if (details) err.details = details;
+  return err;
+}
+
+function truncate(text, max) {
+  const s = String(text ?? '');
+  if (s.length <= max) return { text: s, truncated: false, originalLength: s.length };
+  return { text: `${s.slice(0, max)}\n... [truncated ${s.length - max} chars]`, truncated: true, originalLength: s.length };
+}
+
+/**
+ * Resolve a user/model supplied path against the shared workspace and report
+ * whether it stayed inside. This is the load-bearing privacy check: the same
+ * function decides risk and decides what gets written.
+ */
+function resolvePath(workspaceDir, input) {
+  const raw = String(input ?? '.').trim() || '.';
+  const abs = path.resolve(workspaceDir, raw);
+  const wsWithSep = workspaceDir.endsWith(path.sep) ? workspaceDir : workspaceDir + path.sep;
+  const inWorkspace = abs === workspaceDir || abs.startsWith(wsWithSep);
+  return { abs, raw, inWorkspace, rel: path.relative(workspaceDir, abs) || '.' };
+}
+
+function outsideReason(resolved) {
+  return `path resolves outside the shared workspace (${resolved.abs})`;
+}
+
+/** Risk helper: LOW inside the workspace, `outside` outside it. */
+function workspaceRisk(insideRisk, outsideRisk) {
+  return (args, ctx) => {
+    const resolved = resolvePath(ctx.workspaceDir, args?.path);
+    return resolved.inWorkspace ? { risk: insideRisk } : { risk: outsideRisk, reason: outsideReason(resolved) };
+  };
+}
+
+function isPrivateHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+
+  // Single-label hostnames are almost always the LAN (intranet, router, nas).
+  if (!host.includes('.') && !host.includes(':')) return true;
+
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+  }
+  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true; // IPv6 ULA/link-local
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// shell
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a command through the platform shell (cmd.exe on Windows, /bin/sh
+ * elsewhere), with the shared workspace as cwd. Output is capped and the child
+ * is killed on timeout or cancellation.
+ *
+ * Known limitation: with shell:true the child is the shell, so a grandchild
+ * process may outlive a kill on Windows. The README lists this.
+ */
+function runShellCommand(command, { cwd, timeoutMs, signal, maxOutput = MAX_SHELL_OUTPUT }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    let truncated = false;
+    let timedOut = false;
+
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
+
+    // Never hand the model's API key to a shell command.
+    const env = { ...process.env };
+    delete env.ASSIST_API_KEY;
+
+    const child = spawn(command, {
+      shell: true,
+      cwd,
+      windowsHide: true,
+      env,
+    });
+
+    const append = (which, chunk) => {
+      const text = chunk.toString('utf8');
+      const bucket = which === 'stdout' ? stdout : stderr;
+      if (bucket.length >= maxOutput) {
+        truncated = true;
+        return;
+      }
+      const room = maxOutput - bucket.length;
+      const slice = text.slice(0, room);
+      if (slice.length < text.length) truncated = true;
+      if (which === 'stdout') stdout += slice;
+      else stderr += slice;
+    };
+
+    child.stdout.on('data', (c) => append('stdout', c));
+    child.stderr.on('data', (c) => append('stderr', c));
+
+    const kill = () => {
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, Math.max(1000, Number(timeoutMs) || 30000));
+
+    const onAbort = () => kill();
+    if (signal) {
+      if (signal.aborted) kill();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    child.on('error', (err) => {
+      finish({ ok: false, error: { code: 'SHELL_SPAWN_FAILED', message: err.message }, stdout, stderr, timedOut });
+    });
+
+    child.on('close', (code, sig) => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      finish({
+        ok: code === 0 && !timedOut,
+        exitCode: code,
+        signal: sig || null,
+        timedOut,
+        stdout: truncate(stdout, maxOutput).text,
+        stderr: truncate(stderr, maxOutput).text,
+        truncated,
+        command,
+        cwd,
+      });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} deps
+ * @param {string} deps.workspaceDir
+ * @param {object} deps.config
+ * @param {() => object} deps.getRuntime   late-bound AgentRuntime (bot_message needs it)
+ * @param {() => object} deps.getRoutines  late-bound RoutineStore
+ */
+export function createRegistry(deps) {
+  const tools = new Map();
+
+  const add = (tool) => {
+    tools.set(tool.name, tool);
+    return tool;
+  };
+
+  // --- filesystem ---------------------------------------------------------
+
+  add({
+    name: 'fs_list',
+    description: 'List a directory in the shared workspace. Directories first, sizes included.',
+    risk: workspaceRisk(RISK.LOW, RISK.MEDIUM),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Directory relative to the workspace root. Default ".".' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const r = resolvePath(ctx.workspaceDir, args?.path);
+      const stat = await fsp.stat(r.abs).catch(() => null);
+      if (!stat) throw toolError('FS_NOT_FOUND', `no such path: ${r.rel}`);
+      if (!stat.isDirectory()) throw toolError('FS_NOT_DIR', `${r.rel} is a file, not a directory`);
+
+      const names = await fsp.readdir(r.abs, { withFileTypes: true });
+      const entries = [];
+      for (const entry of names.slice(0, 500)) {
+        const info = await fsp.stat(path.join(r.abs, entry.name)).catch(() => null);
+        entries.push({
+          name: entry.name,
+          type: entry.isDirectory() ? 'dir' : 'file',
+          size: info?.size ?? null,
+          modified: info ? new Date(info.mtimeMs).toISOString() : null,
+        });
+      }
+      entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+      return { path: r.rel, count: entries.length, entries };
+    },
+  });
+
+  add({
+    name: 'fs_read',
+    description: 'Read a UTF-8 text file. Large files are truncated.',
+    risk: workspaceRisk(RISK.LOW, RISK.MEDIUM),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path relative to the workspace root.' },
+        maxBytes: { type: 'number', description: `Cap on characters returned (default ${MAX_FILE_READ}).` },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const r = resolvePath(ctx.workspaceDir, args?.path);
+      if (!args?.path) throw toolError('FS_BAD_ARGS', 'fs_read needs a path');
+      const limited = Math.min(Number(args?.maxBytes) || MAX_FILE_READ, 1000000);
+      let raw;
+      try {
+        raw = await fsp.readFile(r.abs, 'utf8');
+      } catch (err) {
+        if (err.code === 'ENOENT') throw toolError('FS_NOT_FOUND', `no such file: ${r.rel}`);
+        if (err.code === 'EISDIR') throw toolError('FS_IS_DIR', `${r.rel} is a directory; use fs_list`);
+        throw err;
+      }
+      const clipped = truncate(raw, limited);
+      return {
+        path: r.rel,
+        bytes: raw.length,
+        content: clipped.text,
+        truncated: clipped.truncated,
+      };
+    },
+  });
+
+  add({
+    name: 'fs_write',
+    description:
+      'Write UTF-8 text to a file, creating parent directories. Overwrites by default. Paths outside the shared workspace need human approval.',
+    risk: workspaceRisk(RISK.LOW, RISK.HIGH),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path relative to the workspace root.' },
+        content: { type: 'string', description: 'Full file contents.' },
+        mode: { type: 'string', enum: ['overwrite', 'append'], description: 'Default overwrite.' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const r = resolvePath(ctx.workspaceDir, args?.path);
+      if (!args?.path) throw toolError('FS_BAD_ARGS', 'fs_write needs a path');
+      const content = String(args?.content ?? '');
+      await fsp.mkdir(path.dirname(r.abs), { recursive: true });
+      if (args?.mode === 'append') await fsp.appendFile(r.abs, content, 'utf8');
+      else await fsp.writeFile(r.abs, content, 'utf8');
+      return {
+        path: r.rel,
+        bytes: Buffer.byteLength(content, 'utf8'),
+        inWorkspace: r.inWorkspace,
+        mode: args?.mode === 'append' ? 'append' : 'overwrite',
+      };
+    },
+  });
+
+  add({
+    name: 'fs_mkdir',
+    description: 'Create a directory (recursive) inside the shared workspace.',
+    risk: workspaceRisk(RISK.LOW, RISK.HIGH),
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Directory path relative to the workspace root.' } },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const r = resolvePath(ctx.workspaceDir, args?.path);
+      if (!args?.path) throw toolError('FS_BAD_ARGS', 'fs_mkdir needs a path');
+      await fsp.mkdir(r.abs, { recursive: true });
+      return { path: r.rel, created: true, inWorkspace: r.inWorkspace };
+    },
+  });
+
+  add({
+    name: 'fs_delete',
+    description:
+      'Delete a file or directory. Directories need recursive=true. Deletion outside the workspace is HIGH risk and always asks.',
+    risk: workspaceRisk(RISK.MEDIUM, RISK.HIGH),
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path relative to the workspace root.' },
+        recursive: { type: 'boolean', description: 'Required for directories.' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const r = resolvePath(ctx.workspaceDir, args?.path);
+      if (!args?.path) throw toolError('FS_BAD_ARGS', 'fs_delete needs a path');
+      if (r.abs === ctx.workspaceDir) throw toolError('FS_REFUSED', 'refusing to delete the workspace root');
+      const stat = await fsp.stat(r.abs).catch(() => null);
+      if (!stat) throw toolError('FS_NOT_FOUND', `no such path: ${r.rel}`);
+      if (stat.isDirectory() && !args?.recursive) {
+        throw toolError('FS_NEEDS_RECURSIVE', `${r.rel} is a directory; pass recursive=true to remove it`);
+      }
+      await fsp.rm(r.abs, { recursive: Boolean(args?.recursive), force: false });
+      return { path: r.rel, deleted: true, recursive: Boolean(args?.recursive) };
+    },
+  });
+
+  // --- shell --------------------------------------------------------------
+
+  add({
+    name: 'shell',
+    description:
+      'Run a shell command with the shared workspace as the working directory. Output is truncated. Commands matching the danger denylist always require human approval.',
+    // Base MEDIUM: auto-approved only when the bot's policy says so. approvals.mjs
+    // promotes denylisted commands to HIGH.
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Command line, run through the platform shell.' },
+        timeoutMs: { type: 'number', description: 'Kill after this many ms (default 30000, max 120000).' },
+      },
+      required: ['command'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const command = String(args?.command ?? '').trim();
+      if (!command) throw toolError('SHELL_BAD_ARGS', 'shell needs a command');
+      const timeoutMs = Math.min(Math.max(Number(args?.timeoutMs) || 30000, 1000), 120000);
+      return runShellCommand(command, {
+        cwd: ctx.workspaceDir,
+        timeoutMs,
+        signal: ctx.signal,
+      });
+    },
+  });
+
+  // --- network ------------------------------------------------------------
+
+  add({
+    name: 'http_fetch',
+    description:
+      'HTTP GET/POST a public URL. Private networks (localhost, 10/8, 192.168/16, 172.16/12, link-local) are blocked unless ALLOW_PRIVATE=1.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL.' },
+        method: { type: 'string', enum: ['GET', 'POST'], description: 'Default GET.' },
+        headers: { type: 'object', description: 'Extra request headers.' },
+        body: { type: 'string', description: 'Request body for POST.' },
+        maxBytes: { type: 'number', description: 'Cap on response characters (default 100000).' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    async run(args) {
+      let target;
+      try {
+        target = new URL(String(args?.url || ''));
+      } catch {
+        throw toolError('HTTP_BAD_URL', `not a valid URL: ${args?.url}`);
+      }
+      if (!['http:', 'https:'].includes(target.protocol)) {
+        throw toolError('HTTP_BAD_URL', 'only http and https are supported');
+      }
+      if (isPrivateHost(target.hostname) && process.env.ALLOW_PRIVATE !== '1') {
+        throw toolError(
+          'PRIVATE_HOST_BLOCKED',
+          `${target.hostname} is a private or loopback address. Set ALLOW_PRIVATE=1 to allow LAN fetches.`,
+        );
+      }
+
+      const method = String(args?.method || 'GET').toUpperCase();
+      const maxBytes = Math.min(Number(args?.maxBytes) || 100000, 2000000);
+      const headers = { 'user-agent': 'personal-assistant/1.0 (+local)', ...(args?.headers || {}) };
+
+      let res;
+      try {
+        res = await fetch(target.href, {
+          method,
+          headers,
+          body: method === 'POST' ? String(args?.body ?? '') : undefined,
+          signal: AbortSignal.timeout(20000),
+          redirect: 'follow',
+        });
+      } catch (err) {
+        throw toolError('HTTP_FAILED', `request failed: ${err.message}`);
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      const raw = await res.text();
+      const clipped = truncate(raw, maxBytes);
+      return {
+        url: res.url || target.href,
+        status: res.status,
+        ok: res.ok,
+        contentType,
+        bytes: raw.length,
+        body: clipped.text,
+        truncated: clipped.truncated,
+      };
+    },
+  });
+
+  // --- browser ------------------------------------------------------------
+  // One browser session per process (a singleton), so a snapshot and the click
+  // that uses one of its refs hit the same page inside a single turn.
+
+  const browserManager = () => getBrowserManager();
+
+  add({
+    name: 'browser_open',
+    description:
+      'Open a URL in the persistent browser on this machine and return the page title and url. Reuses one long-lived Chromium process with a saved profile, so logins and cookies survive between calls and restarts. ' +
+      'LOW risk: navigating is not destructive. Use browser_snapshot afterwards to see what the page contains.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Absolute http(s) URL.' } },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    run: (args) => browserManager().open(args),
+  });
+
+  add({
+    name: 'browser_snapshot',
+    description:
+      'Read the page the browser is on: visible text (script/style stripped, capped at 8000 chars) plus every interactive element with a stable ref. ' +
+      'Each element looks like {ref:"@e3", tag, role, name, visible}. Always snapshot before clicking or typing; refs from an older page state fail with STALE_REF, so take a new snapshot after the page changes.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    run: () => browserManager().snapshot(),
+  });
+
+  add({
+    name: 'browser_click',
+    description:
+      'Click an element by ref from the latest snapshot ("@e3") or by CSS selector. Uses real mouse events at the element centre, then waits for the page to settle. ' +
+      'MEDIUM risk because a click can submit a form or start a payment.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "@e3".' },
+        selector: { type: 'string', description: 'CSS selector, used when you have no ref.' },
+      },
+      additionalProperties: false,
+    },
+    run: (args) => browserManager().click(args),
+  });
+
+  add({
+    name: 'browser_type',
+    description:
+      'Focus a field (ref from the snapshot, or a CSS selector), clear it, type the text, and optionally press Enter to submit. Returns the value the field actually holds, so you can check it took. ' +
+      'MEDIUM risk because typing into a form can change real state.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "@e2".' },
+        selector: { type: 'string', description: 'CSS selector, used when you have no ref.' },
+        text: { type: 'string', description: 'Text to type into the field.' },
+        submit: { type: 'boolean', description: 'Press Enter after typing (default false).' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    run: (args) => browserManager().type(args),
+  });
+
+  add({
+    name: 'browser_screenshot',
+    description:
+      'Save a PNG of the current page to workspace/artifacts/<timestamp>.png (or a path you pass, inside the workspace) and return its relative path. ' +
+      'Use it to show the human what the page looks like. LOW risk: it only reads the screen.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Optional workspace-relative PNG path.' } },
+      additionalProperties: false,
+    },
+    run: (args, ctx) => browserManager().screenshot(args, ctx),
+  });
+
+  add({
+    name: 'browser_download',
+    description:
+      'Download a URL through the browser (it carries the profile\'s cookies) into workspace/downloads and return the file path and byte count. ' +
+      'Use an optional path to rename it. MEDIUM risk because it pulls a file onto this machine.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL of the file.' },
+        path: { type: 'string', description: 'Optional workspace-relative destination path.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+    run: (args, ctx) => browserManager().download(args, ctx),
+  });
+
+  add({
+    name: 'browser_eval',
+    description:
+      'Run a JavaScript expression in the page and return its JSON value. Powerful and dangerous: it runs with the logged-in session\'s privileges. ' +
+      'HIGH risk, so it always needs a human approval. Prefer snapshot/click/type when they can do the job.',
+    risk: RISK.HIGH,
+    parameters: {
+      type: 'object',
+      properties: { expression: { type: 'string', description: 'JavaScript expression; the value is returned as JSON.' } },
+      required: ['expression'],
+      additionalProperties: false,
+    },
+    run: (args) => browserManager().evaluate(args),
+  });
+
+  add({
+    name: 'browser_close',
+    description: 'Close the browser process this installation is driving. The saved profile stays on disk, so the next run keeps its logins.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    run: () => browserManager().close(),
+  });
+
+  add({
+    name: 'browser_status',
+    description: 'Report whether a browser is running, its pid, profile directory, CDP url and which executable was detected. Use it to check the setup before trying to drive a page.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    run: () => browserManager().status(),
+  });
+
+  // --- memory -------------------------------------------------------------
+
+  add({
+    name: 'memory_write',
+    description:
+      'Append one durable fact to memory. scope="bot" (default) writes to this bot only; scope="shared" writes a fact every bot may use.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The fact to remember. One sentence, plain language.' },
+        scope: { type: 'string', enum: ['bot', 'shared'], description: 'Default "bot".' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const scope = args?.scope === 'shared' ? 'shared' : ctx.bot.id;
+      const saved = await ctx.memory.appendMemory(scope, String(args?.text ?? ''));
+      return { saved: true, scope: scope === 'shared' ? 'shared' : 'bot', entry: saved };
+    },
+  });
+
+  add({
+    name: 'memory_read',
+    description: 'Search this bot\'s memory (plus shared facts) by keywords, newest-relevant first.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords. Empty returns the most recent entries.' },
+        limit: { type: 'number', description: 'Max entries (default 8).' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const entries = await ctx.memory.retrieve({
+        botId: ctx.bot.id,
+        query: String(args?.query || ''),
+        limit: Math.min(Number(args?.limit) || 8, 50),
+      });
+      return {
+        count: entries.length,
+        entries: entries.map((e) => ({ text: e.text, when: e.ts ? new Date(e.ts).toISOString() : null, scope: e.source })),
+      };
+    },
+  });
+
+  // --- skills -------------------------------------------------------------
+
+  add({
+    name: 'skill_list',
+    description: 'List the shared skill library (name, description, when to use).',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      const all = await ctx.skills.listSkills();
+      return {
+        count: all.length,
+        skills: all.map((s) => ({
+          name: s.name,
+          slug: s.slug,
+          description: s.description,
+          when_to_use: s.when_to_use,
+          granted: (ctx.bot.skills || []).includes(s.slug) || (ctx.bot.skills || []).includes(s.name),
+        })),
+      };
+    },
+  });
+
+  add({
+    name: 'skill_read',
+    description: 'Read one skill in full, including its steps, validation and approval notes.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Skill name or slug.' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const skill = await ctx.skills.readSkill(String(args?.name || ''));
+      if (!skill) throw toolError('SKILL_NOT_FOUND', `no skill named "${args?.name}"`);
+      return {
+        name: skill.name,
+        slug: skill.slug,
+        description: skill.description,
+        when_to_use: skill.when_to_use,
+        steps: skill.steps,
+        validation: skill.validation,
+        output: skill.output,
+        approval_notes: skill.approval_notes,
+        body: skill.body.slice(0, 6000),
+      };
+    },
+  });
+
+  add({
+    name: 'skill_save',
+    description:
+      'Save a reusable procedure as a new skill file in the shared library. All of name, description, when_to_use, steps, validation, output and approval_notes are required.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Human name, e.g. "Workspace sweep".' },
+        description: { type: 'string' },
+        when_to_use: { type: 'string' },
+        steps: { type: 'array', items: { type: 'string' }, description: 'Ordered steps.' },
+        validation: { type: 'string', description: 'How to check the skill worked.' },
+        output: { type: 'string', description: 'What the skill produces.' },
+        approval_notes: { type: 'string', description: 'What needs human approval.' },
+        body: { type: 'string', description: 'Optional markdown body explaining the procedure.' },
+      },
+      required: ['name', 'description', 'when_to_use', 'steps', 'validation', 'output', 'approval_notes'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const saved = await ctx.skills.saveSkill(args || {});
+      return { saved: true, name: saved.name, slug: saved.slug, file: saved.file, replaced: saved.replaced };
+    },
+  });
+
+  // --- routines -----------------------------------------------------------
+
+  add({
+    name: 'routine_create',
+    description:
+      'Schedule a recurring instruction for a bot. schedule is a 5-field cron expression or "every N minutes"/"every N hours".',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        instruction: { type: 'string', description: 'The prompt to run each time.' },
+        schedule: { type: 'string', description: 'e.g. "0 9 * * 1-5" or "every 30 minutes".' },
+        botId: { type: 'string', description: 'Defaults to the calling bot.' },
+        timezone: { type: 'string', description: 'IANA timezone, defaults to the assistant timezone.' },
+        enabled: { type: 'boolean' },
+      },
+      required: ['instruction', 'schedule'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const routines = deps.getRoutines();
+      const routine = await routines.create({
+        botId: args?.botId || ctx.bot.id,
+        name: args?.name || 'Scheduled task',
+        instruction: args?.instruction,
+        schedule: args?.schedule,
+        timezone: args?.timezone,
+        enabled: args?.enabled !== false,
+      });
+      return { created: true, routine: publicRoutine(routine) };
+    },
+  });
+
+  add({
+    name: 'routine_list',
+    description: 'List routines with their schedule, enabled flag, next run and last result.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run() {
+      const routines = deps.getRoutines();
+      return { count: routines.list().length, routines: routines.list().map(publicRoutine) };
+    },
+  });
+
+  add({
+    name: 'routine_run',
+    description: 'Queue a routine to run now, unattended. Returns immediately; the run is recorded in the routine history.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Routine id.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const routines = deps.getRoutines();
+      const routine = routines.get(String(args?.id || ''));
+      if (!routine) throw toolError('ROUTINE_NOT_FOUND', `no routine with id "${args?.id}"`);
+      // Queue instead of awaiting: a tool call inside a turn must not start a
+      // nested turn in the same stack.
+      setImmediate(() => {
+        routines.runNow(routine.id, { trigger: 'manual' }).catch((err) => {
+          console.error('[routine_run] failed:', err.message);
+        });
+      });
+      return { queued: true, routineId: routine.id, nextRun: routine.nextRun };
+    },
+  });
+
+  // --- bots ---------------------------------------------------------------
+
+  add({
+    name: 'bot_list',
+    description: 'List the other bots on the team with their role and what they are allowed to do.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      const bots = await ctx.bots.listBots();
+      return {
+        bots: bots.map((b) => ({
+          id: b.id,
+          name: b.name,
+          role: b.role,
+          primary: b.primary,
+          tools: b.tools,
+          isMe: b.id === ctx.bot.id,
+        })),
+      };
+    },
+  });
+
+  add({
+    name: 'bot_message',
+    description:
+      'Send a task to another bot and wait for its reply. This is how work is handed off: the other bot runs its own turn, with its own tools, memory and approval boundary.',
+    // LOW: internal coordination between teammates that share one workspace. The
+    // "sending messages always asks" rule in the reference product is about
+    // outward-facing channels (email, chat to a human); there is no such tool
+    // here. Hand-off depth is capped at one hop in run(), so this cannot spiral.
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: {
+        botId: { type: 'string', description: 'Target bot id.' },
+        text: { type: 'string', description: 'What you are asking them to do.' },
+      },
+      required: ['botId', 'text'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const targetId = String(args?.botId || '');
+      if (targetId === ctx.bot.id) throw toolError('BOT_SELF_MESSAGE', 'a bot cannot message itself; just do the work');
+      if ((ctx.depth || 0) >= 1) {
+        throw toolError('BOT_DEPTH_EXCEEDED', 'bot-to-bot hand-off is limited to one hop to keep turns bounded');
+      }
+      const target = await ctx.bots.getBot(targetId);
+      if (!target) throw toolError('BOT_NOT_FOUND', `no bot with id "${targetId}"`);
+
+      const runtime = deps.getRuntime();
+      const result = await runtime.runTurn({
+        botId: target.id,
+        text: String(args?.text || ''),
+        source: 'bot',
+        depth: (ctx.depth || 0) + 1,
+        unattended: ctx.unattended,
+        parentTurnId: ctx.turnId,
+        // A hand-off from inside a group hands the group context down too: the
+        // teammate then knows the group id and can answer the whole group with
+        // group_post instead of only replying privately.
+        ...(ctx.group && ctx.groupTurn ? { group: ctx.group, groupRole: 'member' } : {}),
+      });
+      return {
+        botId: target.id,
+        botName: target.name,
+        status: result.status,
+        turnId: result.turnId,
+        reply: result.summary || '(no reply)',
+      };
+    },
+  });
+
+  // --- roster management ---------------------------------------------------
+  //
+  // MEDIUM: creating a teammate or reshaping the team is a real change, so it
+  // goes through the same approval boundary as other medium-risk writes. HIGH:
+  // deleting a bot throws away its transcript and its group seats, so a human
+  // must say yes every single time, even when the bot auto-approves medium work.
+
+  add({
+    name: 'bot_create',
+    description:
+      'Create a new teammate bot on this machine. It appears in the roster immediately with its own memory and its own transcript. Give it only the tools it needs; defaults to none.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name; the id is derived from it.' },
+        role: { type: 'string', description: 'One line about what this bot is for.' },
+        tools: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tool grants, by tool name (see the tool list). Defaults to none.',
+        },
+        skills: { type: 'array', items: { type: 'string' }, description: 'Skill grants, by skill name.' },
+        avatar: {
+          type: 'object',
+          description: 'Optional avatar look: {shape, color}.',
+          properties: {
+            shape: { type: 'string', description: 'squircle|circle|blob|star|flower|hex|octagon|diamond|arch|leaf|gem|wave|ring|drop|chip' },
+            color: { type: 'string', description: 'Six-digit hex colour, e.g. "#22c55e".' },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.bots?.createBot !== 'function') {
+        throw toolError('BOTS_API_UNAVAILABLE', 'this runtime cannot create bots');
+      }
+      const name = String(args?.name ?? '').trim();
+      if (!name) throw toolError('BOT_INVALID', 'a bot needs a name');
+
+      const created = await ctx.bots.createBot({
+        name,
+        role: String(args?.role ?? ''),
+        tools: Array.isArray(args?.tools) ? args.tools : [],
+        skills: Array.isArray(args?.skills) ? args.skills : [],
+        ...(args?.avatar && typeof args.avatar === 'object' ? { avatar: args.avatar } : {}),
+      });
+      return {
+        created: true,
+        bot: {
+          id: created.id,
+          name: created.name,
+          role: created.role,
+          tools: created.tools,
+          skills: created.skills,
+          avatar: created.avatar,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'bot_update',
+    description:
+      'Change an existing bot: its display name, role, tool grants, skill grants or avatar look. Ids are immutable; to rename the id, create a new bot.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Target bot id.' },
+        name: { type: 'string', description: 'New display name.' },
+        role: { type: 'string', description: 'New role line.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Replacement tool grants.' },
+        skills: { type: 'array', items: { type: 'string' }, description: 'Replacement skill grants.' },
+        avatar: {
+          type: 'object',
+          description: 'Avatar look to merge: {shape?, color?}.',
+          properties: {
+            shape: { type: 'string' },
+            color: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.bots?.updateBot !== 'function') {
+        throw toolError('BOTS_API_UNAVAILABLE', 'this runtime cannot update bots');
+      }
+      const id = String(args?.id ?? '').trim();
+      if (!id) throw toolError('BOT_INVALID', 'id is required');
+
+      const patch = {};
+      if (args?.name !== undefined) patch.name = String(args.name);
+      if (args?.role !== undefined) patch.role = String(args.role);
+      if (args?.tools !== undefined) patch.tools = Array.isArray(args.tools) ? args.tools.map(String) : [];
+      if (args?.skills !== undefined) patch.skills = Array.isArray(args.skills) ? args.skills.map(String) : [];
+      if (args?.avatar !== undefined && typeof args.avatar === 'object' && args.avatar !== null) patch.avatar = args.avatar;
+      if (!Object.keys(patch).length) {
+        throw toolError('BOT_NOTHING_TO_UPDATE', 'nothing to change: pass name, role, tools, skills or avatar');
+      }
+
+      const updated = await ctx.bots.updateBot(id, patch);
+      return {
+        updated: true,
+        bot: {
+          id: updated.id,
+          name: updated.name,
+          role: updated.role,
+          tools: updated.tools,
+          skills: updated.skills,
+          avatar: updated.avatar,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'bot_delete',
+    description:
+      'Delete a teammate bot permanently. Its transcript and its seats in group chats are removed; its memory file stays on disk. The primary bot cannot be deleted. This is HIGH risk and always asks a human first.',
+    risk: RISK.HIGH,
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Bot id to delete.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.bots?.deleteBot !== 'function') {
+        throw toolError('BOTS_API_UNAVAILABLE', 'this runtime cannot delete bots');
+      }
+      const id = String(args?.id ?? '').trim();
+      if (!id) throw toolError('BOT_INVALID', 'id is required');
+
+      const target = await ctx.bots.getBot(id);
+      if (!target) throw toolError('BOT_NOT_FOUND', `no bot with id "${id}"`);
+      if (target.primary || ctx.config?.primaryBotId === id) {
+        throw toolError(
+          'BOT_PRIMARY_PROTECTED',
+          `"${target.name}" is the primary bot; promote another bot first, then delete this one`,
+        );
+      }
+      if (id === ctx.bot?.id) {
+        throw toolError('BOT_SELF_DELETE', 'a bot cannot delete itself; ask another bot or the human to do it');
+      }
+
+      const result = await ctx.bots.deleteBot(id, ctx.config);
+      return {
+        deleted: true,
+        id,
+        name: target.name,
+        groupsRepaired: result.groupsRepaired || [],
+      };
+    },
+  });
+
+  // --- groups --------------------------------------------------------------
+
+  add({
+    name: 'group_create',
+    description:
+      'Create a group chat with 2-6 teammates and one coordinator. The coordinator is the bot that runs a turn when the human posts in the group; the others speak through group_post when it messages them.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Group name, shown to the human.' },
+        members: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '2-6 members, by bot id or display name.',
+        },
+        coordinator: { type: 'string', description: 'Bot id or name that runs the group turns. Defaults to the first member.' },
+      },
+      required: ['name', 'members'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.groups?.createGroup !== 'function') {
+        throw toolError('GROUPS_UNAVAILABLE', 'this runtime has no group store');
+      }
+      const bots = await ctx.bots.listBots();
+      const resolve = (ref) => {
+        const key = String(ref ?? '').trim().toLowerCase();
+        if (!key) return null;
+        return bots.find((b) => b.id.toLowerCase() === key || b.name.toLowerCase() === key) || null;
+      };
+
+      // Size first: passing one member should read as "too few members", even if
+      // that member does not exist yet.
+      const rawMembers = Array.isArray(args?.members) ? args.members : [];
+      if (typeof ctx.groups.assertMemberCount === 'function' && typeof ctx.groups.normalizeMemberIds === 'function') {
+        ctx.groups.assertMemberCount(ctx.groups.normalizeMemberIds(rawMembers));
+      }
+
+      const members = [];
+      const unknown = [];
+      for (const ref of Array.isArray(args?.members) ? args.members : []) {
+        const bot = resolve(ref);
+        if (!bot) unknown.push(String(ref));
+        else if (!members.includes(bot.id)) members.push(bot.id);
+      }
+      if (unknown.length) throw toolError('GROUP_UNKNOWN_MEMBER', `no bot matches: ${unknown.join(', ')}`);
+
+      let coordinatorId;
+      if (args?.coordinator !== undefined && String(args.coordinator).trim() !== '') {
+        const bot = resolve(args.coordinator);
+        if (!bot) throw toolError('GROUP_UNKNOWN_MEMBER', `no bot matches "${args.coordinator}"`);
+        coordinatorId = bot.id;
+      }
+
+      const group = await ctx.groups.createGroup({ name: args?.name, members, coordinatorId });
+      return {
+        created: true,
+        group: {
+          id: group.id,
+          name: group.name,
+          members: group.members,
+          coordinatorId: group.coordinatorId,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'group_post',
+    description:
+      'Say something in a group chat. Every message posted here is shown to the human and to all group members, so keep it short and useful.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: 'Group id.' },
+        text: { type: 'string', description: 'What to say in the group, in one short message.' },
+      },
+      required: ['group', 'text'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.groups?.appendGroupMessage !== 'function') {
+        throw toolError('GROUPS_UNAVAILABLE', 'this runtime has no group store');
+      }
+      const groupId = String(args?.group ?? '').trim();
+      const text = String(args?.text ?? '').trim();
+      if (!groupId) throw toolError('GROUP_REQUIRED', 'group id is required');
+      if (!text) throw toolError('EMPTY_MESSAGE', 'text is required');
+      if (text.length > 8000) throw toolError('MESSAGE_TOO_LONG', 'a group message is limited to 8000 characters');
+
+      const group = await ctx.groups.getGroup(groupId);
+      if (!group) throw toolError('GROUP_NOT_FOUND', `no group with id "${groupId}"`);
+      if (!group.members.includes(ctx.bot.id)) {
+        throw toolError('GROUP_MEMBER_REQUIRED', `you are not a member of "${group.name}"`);
+      }
+
+      const message = await ctx.groups.appendGroupMessage(group.id, {
+        kind: 'assistant',
+        from: ctx.bot.id,
+        text,
+        turnId: ctx.turnId,
+      });
+      // Push it to open group streams immediately; the transcript is the source
+      // of truth, this is just the live view.
+      ctx.emit({ type: 'group.message', groupId: group.id, message: ctx.groups.publicGroupMessage(message) });
+      return { posted: true, groupId: group.id, groupName: group.name, messageId: message.id };
+    },
+  });
+
+  // --- control ------------------------------------------------------------
+
+  add({
+    name: 'task_finish',
+    description: 'Declare the task complete. Provide a short summary of what you actually did.',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: { summary: { type: 'string', description: 'What changed, in one or two sentences.' } },
+      required: ['summary'],
+      additionalProperties: false,
+    },
+    async run(args) {
+      return { finished: true, summary: String(args?.summary || 'Done.') };
+    },
+  });
+
+  // --- registry surface ---------------------------------------------------
+
+  const api = {
+    tools,
+    get(name) {
+      return tools.get(name) || null;
+    },
+    all() {
+      return [...tools.values()];
+    },
+    /**
+     * Only what this bot was granted. task_finish is always available.
+     *
+     * Browser tools are one session capability: a bot that can open a page can
+     * also snapshot/click/type it, otherwise the grant would be useless. Each
+     * action still carries its own risk, so MEDIUM/HIGH still stop for a human.
+     */
+    grantedFor(bot) {
+      return api.all().filter((t) => api.isGranted(bot, t.name));
+    },
+    isGranted(bot, name) {
+      if (name === 'task_finish') return true;
+      const grants = new Set(bot?.tools || []);
+      if (grants.has(name)) return true;
+      if (name.startsWith('browser_') && grants.has('browser_open')) return true;
+      return false;
+    },
+    /** OpenAI function-tool schemas for the model call. */
+    schemasFor(bot) {
+      return api.grantedFor(bot).map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      }));
+    },
+    /** Human-readable tool list for the system prompt. */
+    renderToolDigest(bot) {
+      return api
+        .grantedFor(bot)
+        .map((t) => {
+          const risk = typeof t.risk === 'string' ? t.risk : 'LOW/HIGH depending on arguments';
+          return `- ${t.name} (${risk}): ${t.description}`;
+        })
+        .join('\n');
+    },
+  };
+
+  return api;
+}
+
+function publicRoutine(routine) {
+  return {
+    id: routine.id,
+    botId: routine.botId,
+    name: routine.name,
+    instruction: routine.instruction,
+    schedule: routine.schedule,
+    timezone: routine.timezone,
+    enabled: routine.enabled,
+    lastRun: routine.lastRun,
+    nextRun: routine.nextRun,
+    lastStatus: routine.lastStatus,
+    runs: routine.runs.slice(-5),
+  };
+}
+
+export { resolvePath, isPrivateHost, runShellCommand, MAX_SHELL_OUTPUT };

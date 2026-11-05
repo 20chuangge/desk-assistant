@@ -1,0 +1,35 @@
+# mobile/ — Capacitor shell
+#
+# Everything here except node_modules/www/keystores is meant to be committed,
+# including the generated android/ and ios/ native projects.
+
+node_modules/
+www/
+*.log
+
+# Release signing material — never commit a keystore or its passwords.
+*.jks
+*.keystore
+keystore.properties
+*.p12
+*.mobileprovision
+
+# Android build output (android/.gitignore covers most of this; these are the
+# paths Gradle/CI create outside the module directory)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/capacitor-cordova-android-plugins/
+
+# iOS build output (ios/.gitignore covers most of this)
+ios/App/build/
+ios/App/Pods/
+ios/App/App/Pods/
+ios/App/DerivedData/
+ios/App/output/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate

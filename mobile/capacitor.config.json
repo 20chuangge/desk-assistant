@@ -1,0 +1,30 @@
+{
+  "appId": "com.desk.assistant",
+  "appName": "Desk",
+  "webDir": "www",
+  "backgroundColor": "#08090d",
+  "server": {
+    "hostname": "localhost",
+    "androidScheme": "http",
+    "iosScheme": "capacitor",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "backgroundColor": "#08090d",
+    "zoomEnabled": false
+  },
+  "ios": {
+    "backgroundColor": "#08090d",
+    "preferredContentMode": "mobile",
+    "zoomEnabled": false,
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "Keyboard": {
+      "resize": "native",
+      "resizeOnFullScreen": false,
+      "style": "dark"
+    }
+  }
+}

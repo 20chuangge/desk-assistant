@@ -1,0 +1,109 @@
+name: Android APK
+
+# Builds the Desk Android app from public/ (the single-file web UI) + mobile/
+# (the Capacitor shell). Produces `desk-android`:
+#   - with signing secrets   -> app-release.apk   (installable, R8-free release build)
+#   - without signing secrets -> app-debug.apk    (installable, debuggable)
+#
+# Nothing is built on the developer machine; the APK always comes from here
+# (or from a local `npm run build:android:debug` if a JDK+SDK exist).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'public/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - 'public/**'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  apk:
+    name: Build desk-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # All optional. When DESK_KEYSTORE_BASE64 is empty the job builds a debug
+      # APK instead of failing — every push still yields an installable file.
+      DESK_KEYSTORE_BASE64: ${{ secrets.DESK_KEYSTORE_BASE64 }}
+      DESK_KEY_ALIAS: ${{ secrets.DESK_KEY_ALIAS }}
+      DESK_KEY_PASSWORD: ${{ secrets.DESK_KEY_PASSWORD }}
+      DESK_STORE_PASSWORD: ${{ secrets.DESK_STORE_PASSWORD }}
+      DESK_VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build webDir from public/
+        run: npm run sync:www
+
+      - name: Sync Capacitor (plugins + web assets into android/)
+        run: npx cap sync android
+
+      - name: Decode release keystore
+        if: ${{ env.DESK_KEYSTORE_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$DESK_KEYSTORE_BASE64" | tr -d '\r\n' | openssl base64 -d -A \
+            > "$RUNNER_TEMP/desk-release.jks"
+          echo "DESK_KEYSTORE=$RUNNER_TEMP/desk-release.jks" >> "$GITHUB_ENV"
+          if [ -z "${DESK_STORE_PASSWORD:-}" ]; then
+            echo "DESK_STORE_PASSWORD=$DESK_KEY_PASSWORD" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build signed release APK
+        if: ${{ env.DESK_KEYSTORE_BASE64 != '' }}
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Build debug APK (no signing secrets configured)
+        if: ${{ env.DESK_KEYSTORE_BASE64 == '' }}
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Show what was produced
+        run: |
+          find android/app/build/outputs/apk -name '*.apk' -printf '%p  %s bytes\n' | sort
+
+      - name: Upload desk-android
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-android
+          path: |
+            mobile/android/app/build/outputs/apk/release/*.apk
+            mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30

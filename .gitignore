@@ -1,0 +1,45 @@
+﻿# runtime state - created on first boot
+data/
+workspace/notes/
+workspace/.browser-profile/
+
+# dependencies (root is zero-dep; the shells carry their own)
+node_modules/
+desktop/node_modules/
+mobile/node_modules/
+desktop/package-lock.json
+
+# build output
+desktop/dist/
+mobile/www/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/ios/App/Pods/
+mobile/ios/App/App.xcworkspace/
+mobile/ios/App/build/
+*.blockmap
+
+# signing material - never commit
+*.jks
+*.keystore
+keystore.properties
+*.p12
+*.mobileprovision
+.env
+.env.*
+
+# scratch
+*.tmp
+.DS_Store
+Thumbs.db
+npm-debug.log*
+
+# release artifacts (built bundles, not source)
+release/
+*.tar.gz
+*.zip
+
+# local screen captures / test output
+workspace/artifacts/
+workspace/downloads/

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>Desk</title>
+<style>
+  /* Same palette as public/index.html: near-black surfaces, one accent. */
+  :root {
+    --bg: #08090d;
+    --panel: #10131a;
+    --panel-2: #151a23;
+    --border: #232a38;
+    --text: #e7e9f0;
+    --muted: #8b93a6;
+    --dim: #5e6678;
+    --accent: #7c5cff;
+    --accent-2: #9a80ff;
+    --green: #2fbf71;
+    --amber: #f0a72c;
+    --red: #ef5350;
+    --mono: "Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, Arial, sans-serif;
+    --radius: 12px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    min-height: 100%;
+    background: radial-gradient(1200px 600px at 20% -10%, #16112b 0%, var(--bg) 55%) fixed, var(--bg);
+    color: var(--text);
+    font: 14px/1.55 var(--sans);
+  }
+
+  #stage {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: calc(28px + var(--safe-top)) 20px calc(20px + var(--safe-bottom));
+  }
+
+  .card {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 24px 20px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  }
+  .card[hidden] { display: none; }
+
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(145deg, var(--accent-2), var(--accent));
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 17px; color: #fff;
+  }
+  .brand .name { font-size: 15px; font-weight: 650; letter-spacing: 0.2px; }
+  .brand .sub { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+
+  h1 { font-size: 20px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.2px; }
+  h1 .en { display: block; font-size: 12.5px; font-weight: 500; color: var(--muted); margin-top: 4px; letter-spacing: 0; }
+  .lede { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+
+  label { display: block; margin-bottom: 14px; }
+  label .lbl { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  label .lbl .opt { color: var(--dim); }
+  input[type="url"], input[type="text"], input[type="password"] {
+    width: 100%;
+    background: #0b0e14;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 12px;
+    font: 13px/1.4 var(--mono);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input::placeholder { color: var(--dim); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.16); }
+
+  button {
+    font: 600 14px/1 var(--sans);
+    border-radius: var(--radius);
+    border: 1px solid transparent;
+    padding: 14px 16px;
+    width: 100%;
+    cursor: pointer;
+    transition: filter 0.15s ease, background 0.15s ease;
+  }
+  button.primary { background: linear-gradient(180deg, var(--accent-2), var(--accent)); color: #fff; }
+  button.primary:active { filter: brightness(0.92); }
+  button.ghost { background: transparent; border-color: var(--border); color: var(--text); }
+  button.ghost:active { background: var(--panel-2); }
+  button:disabled { opacity: 0.55; cursor: default; }
+
+  .row { display: flex; gap: 10px; margin-top: 10px; }
+  .row button { flex: 1; }
+
+  .err {
+    display: none;
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(239, 83, 80, 0.12);
+    border: 1px solid rgba(239, 83, 80, 0.35);
+    color: #ffb4b2;
+    font-size: 12.5px;
+    white-space: pre-wrap;
+  }
+  .err.show { display: block; }
+
+  .hint { margin: 14px 0 0; font-size: 11.5px; color: var(--dim); line-height: 1.65; }
+  .hint code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 12px; margin: 16px 0 0; }
+  .kv dt { color: var(--dim); white-space: nowrap; }
+  .kv dd { margin: 0; color: var(--muted); font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: var(--mono);
+    background: rgba(47, 191, 113, 0.14);
+    color: var(--green);
+  }
+  .pill.warn { background: rgba(240, 167, 44, 0.14); color: var(--amber); }
+
+  .spinner {
+    width: 24px; height: 24px; margin: 0 auto 14px;
+    border-radius: 50%;
+    border: 2px solid rgba(124, 92, 255, 0.25);
+    border-top-color: var(--accent-2);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #booting { text-align: center; }
+  #booting-text { margin: 0 0 4px; font-size: 13.5px; }
+  #booting-url { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--dim); word-break: break-all; }
+
+  .foot {
+    max-width: 420px;
+    margin: 14px auto 0;
+    font-size: 11px;
+    color: var(--dim);
+    text-align: center;
+    font-family: var(--mono);
+  }
+  a.link { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+</style>
+</head>
+<body>
+<!--
+  Desk mobile shell = a launchpad, not a browser chrome.
+
+  It remembers *which* Desk hub to use, checks that it answers, and then loads
+  the hub's own UI at the top level of the WebView (not in an iframe). That is
+  what makes the hub's session cookie work: the cookie is HttpOnly +
+  SameSite=Lax, so a cross-site iframe (localhost -> 192.168.x.x) would never
+  send it, while a top-level navigation is first-party and behaves exactly like
+  the desktop browser. See docs/BUILD-MOBILE.md.
+-->
+<div id="stage">
+
+  <!-- 1. first launch / change hub -->
+  <section id="connect" class="card" hidden>
+    <div class="brand">
+      <div class="mark">D</div>
+      <div>
+        <div class="name">Desk</div>
+        <div class="sub">personal assistant · mobile</div>
+      </div>
+    </div>
+
+    <h1>连接你的 Desk<span class="en">Connect to your Desk</span></h1>
+    <p class="lede">手机上用的是电脑端同一份界面。填上你电脑正在跑的那个 Hub 地址就行。</p>
+
+    <div id="connect-error" class="err"></div>
+
+    <form id="connect-form" autocomplete="off">
+      <label>
+        <span class="lbl"><span>Hub 地址</span><span class="opt">host:port</span></span>
+        <input id="hub-url" name="hub-url" type="url" inputmode="url"
+               autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="http://192.168.1.23:4390" required />
+      </label>
+      <label>
+        <span class="lbl"><span>配对码</span><span class="opt">可选 · 6 位</span></span>
+        <input id="hub-code" name="hub-code" type="text" inputmode="numeric"
+               autocomplete="one-time-code" autocapitalize="off" autocorrect="off"
+               spellcheck="false" maxlength="12" placeholder="电脑上「设置 → 配对」里那串" />
+      </label>
+      <button id="connect-btn" class="primary" type="submit">连接并打开</button>
+    </form>
+
+    <p class="hint">
+      电脑上要用 <code>ASSIST_ALLOW_REMOTE=1 HOST=0.0.0.0 npm start</code> 启动（默认只监听本机，
+      手机看不到）。手机和电脑在同一局域网，端口默认 <code>4390</code>。
+      配对码留空也行：打开后 Desk 自己会显示配对页。
+    </p>
+    <div class="row">
+      <button id="paste-btn" class="ghost" type="button">粘贴地址</button>
+      <button id="preview-btn" class="ghost" type="button">预览内置界面</button>
+    </div>
+  </section>
+
+  <!-- 2. a hub is remembered -->
+  <section id="connected" class="card" hidden>
+    <div class="brand">
+      <div class="mark">D</div>
+      <div>
+        <div class="name">Desk</div>
+        <div class="sub">personal assistant · mobile</div>
+      </div>
+    </div>
+
+    <h1>已记住你的 Desk<span class="en">Ready to open</span></h1>
+    <p class="lede">数据一直在电脑上，手机只是那台电脑的一块屏幕。</p>
+
+    <dl class="kv">
+      <dt>Hub</dt><dd id="current-hub">—</dd>
+      <dt>状态</dt><dd><span id="current-status" class="pill warn">未检测</span></dd>
+      <dt>外壳</dt><dd id="shell-version">—</dd>
+    </dl>
+
+    <div class="row" style="margin-top:18px">
+      <button id="open-btn" class="primary" type="button">打开 Desk</button>
+    </div>
+    <div class="row">
+      <button id="change-btn" class="ghost" type="button">更换 Hub</button>
+      <button id="forget-btn" class="ghost" type="button">忘记</button>
+    </div>
+
+    <p class="hint">
+      想改地址或重新配对：Android 在 Desk 里按返回键就回到这一屏；iOS 退出 App 再打开，
+      这一屏永远是启动页。
+    </p>
+  </section>
+
+  <!-- 3. probing the hub -->
+  <section id="booting" class="card" hidden>
+    <div class="spinner"></div>
+    <p id="booting-text">正在连接…</p>
+    <p id="booting-url"></p>
+    <div class="row">
+      <button id="booting-cancel" class="ghost" type="button">取消</button>
+    </div>
+  </section>
+
+  <!-- 4. hub not reachable -->
+  <section id="offline" class="card" hidden>
+    <h1>连不上你的 Desk<span class="en">Hub not reachable</span></h1>
+    <p class="lede" id="offline-detail">Hub 没有响应。</p>
+    <dl class="kv">
+      <dt>Hub</dt><dd id="offline-url">—</dd>
+    </dl>
+    <div class="row" style="margin-top:18px">
+      <button id="offline-retry" class="primary" type="button">重试</button>
+      <button id="offline-change" class="ghost" type="button">换一个 Hub</button>
+    </div>
+    <p class="hint">
+      依次检查：电脑上 Desk 还在跑吗？启动时带了 <code>ASSIST_ALLOW_REMOTE=1</code> 和
+      <code>HOST=0.0.0.0</code> 吗？手机和电脑在同一个 Wi-Fi 吗？系统防火墙放行端口了吗？
+    </p>
+  </section>
+
+  <div class="foot" id="foot">Desk mobile shell</div>
+</div>
+<script src="launcher.js"></script>
+</body>
+</html>

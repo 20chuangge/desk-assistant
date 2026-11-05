@@ -1,0 +1,40 @@
+{
+  "name": "desk-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Desk mobile shell (Capacitor): connects to a Desk hub on your LAN and shows its web UI.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "sync:www": "node scripts/sync-www.mjs",
+    "sync": "npm run sync:www && cap sync",
+    "add:android": "npm run sync:www && cap add android",
+    "add:ios": "npm run sync:www && cap add ios",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "build:android:debug": "npm run sync:www && cap sync android && cd android && ./gradlew assembleDebug",
+    "build:android:release": "npm run sync:www && cap sync android && cd android && ./gradlew assembleRelease",
+    "verify:yaml": "node scripts/verify-workflows.mjs"
+  },
+  "keywords": [
+    "desk",
+    "capacitor",
+    "android",
+    "ios"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.10",
+    "@capacitor/ios": "^7.6.10",
+    "@capacitor/keyboard": "^7.0.6",
+    "@capacitor/preferences": "^7.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.10",
+    "yaml": "^2.9.1"
+  }
+}

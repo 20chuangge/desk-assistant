@@ -1,0 +1,77 @@
+appId: com.desk.assistant
+productName: Desk
+copyright: Copyright © 2026
+
+directories:
+  output: dist
+  buildResources: build
+
+# The Electron entry stays tiny: main.mjs + package.json.
+# The agent is shipped alongside it as plain files (not inside asar) because the
+# shell starts it with a separate Node process.
+files:
+  - main.mjs
+  - preload.mjs
+  - connect.html
+  - package.json
+  - build/icon.png
+  - "!**/*.map"
+
+extraResources:
+  - from: ../src
+    to: server/src
+    filter: ["**/*.mjs"]
+  - from: ../public
+    to: server/public
+  - from: ../config
+    to: server/config
+  - from: ../skills
+    to: server/skills
+  - from: ../workspace
+    to: server/workspace
+  - from: ../package.json
+    to: server/package.json
+
+asar: true
+compression: normal
+removePackageScripts: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+  publisherName: Desk
+  artifactName: Desk-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Desk
+  deleteAppDataOnUninstall: false
+  uninstallDisplayName: Desk (个人助理)
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  artifactName: Desk-Setup-${version}.${ext}
+
+portable:
+  artifactName: Desk-Portable-${version}.${ext}
+
+mac:
+  target: [dmg]
+  icon: build/icon.png
+  category: public.app-category.productivity
+  darkModeSupport: true
+
+linux:
+  target: [AppImage]
+  icon: build/icon.png
+  category: Utility
+  synopsis: Personal AI assistant with its own computer

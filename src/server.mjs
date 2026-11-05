@@ -1,0 +1,1550 @@
+/**
+ * server.mjs - node:http, no framework, no dependencies.
+ *
+ * REST for state, SSE for liveness. Every route returns JSON (except the static
+ * files) and every failure returns { error: { code, message } } with a real
+ * status code, so the UI never has to guess.
+ *
+ * Start:  node src/server.mjs        (PORT=0 picks a free port)
+ * Ready:  prints one line of JSON {"event":"ready","port":N,...} on stdout, which
+ *         is what scripts/smoke.mjs parses. Human logging goes to stderr.
+ */
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import fsp from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
+import {
+  P,
+  ensureDirs,
+  uid,
+  nowIso,
+  EventBus,
+  readAudit,
+  readJsonl,
+  readJsonSync,
+  writeJsonSyncAtomic,
+  appendJsonl,
+  sessionFile,
+  audit,
+} from './store.mjs';
+import {
+  loadAssistantConfig,
+  listBots,
+  getBot,
+  createBot,
+  updateBot,
+  deleteBot,
+  setPrimaryBot,
+  lastMessagePreview,
+  findAvatarFile,
+  avatarMimeForExt,
+  saveAvatarImage,
+  removeAvatarImage,
+  AVATAR_MAX_BYTES,
+  AVATAR_MIME_TYPES,
+  migrateSeedGrants,
+  writeAssistantConfig,
+} from './bots.mjs';
+import { computerSnapshot, captureScreen } from './computer.mjs';
+import { createRegistry } from './tools.mjs';
+import { ApprovalQueue } from './approvals.mjs';
+import { RoutineStore } from './routines.mjs';
+import { AgentRuntime, recoverInterruptedTurns } from './agent.mjs';
+import * as memory from './memory.mjs';
+import * as skills from './skills.mjs';
+import * as groups from './groups.mjs';
+import * as settingsModule from './settings.mjs';
+import {
+  evaluateAuth,
+  isAuthExemptPath,
+  isPublicShellPath,
+  isLoopbackHost,
+  clientIp,
+  safeEqual,
+  sessionCookieHeader,
+  createRateLimiter,
+  loadOrCreateSecurity,
+  listLanAddresses,
+  preferredLanAddress,
+  lanUrlFor,
+} from './auth.mjs';
+
+const VERSION = '1.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
+const DEFAULT_PORT = Number(process.env.PORT ?? 4390);
+const MAX_BODY_BYTES = 1024 * 1024;
+
+/** ASSIST_ALLOW_REMOTE=1 is the only way to expose this beyond loopback. */
+function remoteAccessAllowed() {
+  const value = String(process.env.ASSIST_ALLOW_REMOTE || '').toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+// ---------------------------------------------------------------------------
+// bootstrap
+// ---------------------------------------------------------------------------
+
+/** Wire every module together. Exported so scripts/smoke.mjs could embed it too. */
+export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {}) {
+  await ensureDirs();
+
+  // New releases add tools; existing installs only get them through this
+  // additive migration (config seeds are copy-if-missing).
+  const migrated = await migrateSeedGrants();
+  if (migrated) console.log(`[assistant] migrated seed grants for ${migrated} bot(s)`);
+
+  const config = await loadAssistantConfig();
+  const workspaceDir = P.workspaceDir;
+  config.workspaceDir = workspaceDir;
+
+  // Settings + secret are read once at boot; PUT /api/settings rewrites both and
+  // swaps the live model client without a restart.
+  const settings = await settingsModule.loadSettings();
+  const apiKey = await settingsModule.loadSecret();
+  const security = await loadOrCreateSecurity();
+
+  const bus = new EventBus();
+  const approvals = new ApprovalQueue({
+    timeoutMs: Number(config.policy.approvalTimeoutMs) || 10 * 60 * 1000,
+    onAudit: (record) => audit(record),
+    // Durability over cleverness: the pending list is written synchronously so a
+    // kill -9 between "card shown" and "human clicks" cannot lose the card.
+    onPersist: (records) => {
+      try {
+        writeJsonSyncAtomic(P.pendingFile, { updatedAt: nowIso(), approvals: records });
+      } catch (err) {
+        console.error('[approvals] could not write pending file:', err.message);
+      }
+    },
+  });
+
+  // Late-bound references: the routine runner needs the runtime, the
+  // bot_message tool needs the runtime, and the registry is needed to build it.
+  const refs = { runtime: null, routines: null };
+
+  const registry = createRegistry({
+    workspaceDir,
+    config,
+    getRuntime: () => {
+      if (!refs.runtime) throw new Error('agent runtime is not ready yet');
+      return refs.runtime;
+    },
+    getRoutines: () => {
+      if (!refs.routines) throw new Error('routines are not ready yet');
+      return refs.routines;
+    },
+  });
+
+  const model = settingsModule.createModelFromSettings(settings, apiKey);
+  // The memory/skills modules are already exactly the surface the tools and the
+  // agent need, so they are passed through as namespaces.
+  const memoryApi = memory;
+  const skillsApi = skills;
+
+  const routines = new RoutineStore({
+    config,
+    tickMs: 20000,
+    runner: async (routine) => {
+      const result = await refs.runtime.runTurn({
+        botId: routine.botId,
+        text: routine.instruction,
+        source: 'routine',
+        unattended: true,
+      });
+      return result;
+    },
+  });
+  refs.routines = routines;
+
+  // The agent's bot/group tools call exactly the same functions as the REST
+  // routes, so a bot-created group and a UI-created group are the same thing.
+  const botsApi = { listBots, getBot, createBot, updateBot, deleteBot };
+  const runtime = new AgentRuntime({
+    config,
+    registry,
+    model,
+    bots: botsApi,
+    groups,
+    memory: memoryApi,
+    skills: skillsApi,
+    approvals,
+    bus,
+  });
+  refs.runtime = runtime;
+
+  // --- crash recovery ------------------------------------------------------
+  // Restore cards a human had not answered yet, and explain every turn the
+  // previous process did not get to finish.
+  const savedPending = readJsonSync(P.pendingFile, null);
+  if (savedPending?.approvals?.length) {
+    const restored = approvals.restore(savedPending.approvals);
+    if (restored) console.error(`[assistant] restored ${restored} pending approval(s) from the previous run`);
+  }
+  const recoveredTurns = await recoverInterruptedTurns({ bus });
+  if (recoveredTurns.length) {
+    console.error(`[assistant] marked ${recoveredTurns.length} interrupted turn(s) as needs_attention`);
+  }
+
+  await routines.load();
+  routines.start();
+
+  const state = {
+    config,
+    bus,
+    approvals,
+    routines,
+    registry,
+    runtime,
+    model,
+    settings,
+    apiKey, // never projected into a response; only `hasKey` leaves this module
+    security,
+    workspaceDir,
+    startedAt: Date.now(),
+    host,
+    port,
+    lanUrl: null,
+    pairingUrl: null,
+    requireAuth: true,
+    pairLimiter: createRateLimiter({ limit: 5, windowMs: 60_000 }),
+    recoveredTurns,
+  };
+  const server = http.createServer((req, res) => {
+    handleRequest(req, res, state).catch((err) => {
+      // Last-resort guard: no route may ever produce an unhandled rejection.
+      console.error('[assistant] unhandled request error:', err);
+      if (!res.headersSent) errorResponse(res, 500, 'INTERNAL', 'unexpected server error');
+      else res.end();
+    });
+  });
+
+  return { server, state, port, host };
+}
+
+// ---------------------------------------------------------------------------
+// route table
+// ---------------------------------------------------------------------------
+
+const routes = [];
+
+function route(method, pattern, handler, options = {}) {
+  // `rawBody: true` opts a route out of JSON body parsing - avatar uploads are
+  // raw image bytes, and turning a PNG into UTF-8 would be the end of it.
+  routes.push({ method, pattern, handler, ...options });
+}
+
+/**
+ * Handlers receive (req, res, { params, query, body, state }).
+ * They may return a value (sent as 200 JSON), or write to res themselves and
+ * return undefined.
+ */
+async function handleRequest(req, res, state) {
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = safeDecode(url.pathname);
+  const method = (req.method || 'GET').toUpperCase();
+
+  if (pathname === '/api' || pathname.startsWith('/api/')) {
+    // Loopback is the local user. Everything else has to pair first - except the
+    // two endpoints that exist precisely so an unauthenticated client can find
+    // out it needs to pair and then do it.
+    if (!isAuthExemptPath(method, pathname)) {
+      const auth = evaluateAuth(req, state.security);
+      if (!auth.authorized) {
+        return errorResponse(
+          res,
+          401,
+          'AUTH_REQUIRED',
+          'this device is not paired: POST /api/pair with the code shown in Settings, or send Authorization: Bearer <token>',
+        );
+      }
+      req.auth = auth;
+    }
+    return dispatchApi(req, res, state, pathname, url);
+  }
+
+  // Static: the app shell has to load before a client can pair, so those files
+  // are public. Anything else in public/ is treated like app data.
+  const auth = evaluateAuth(req, state.security);
+  if (!auth.authorized && !isPublicShellPath(pathname)) {
+    return errorResponse(res, 401, 'AUTH_REQUIRED', 'this device is not paired');
+  }
+  return serveStatic(req, res, pathname);
+}
+
+async function dispatchApi(req, res, state, pathname, url) {
+  const method = (req.method || 'GET').toUpperCase();
+
+  for (const entry of routes) {
+    if (entry.method !== method) continue;
+    const match = pathname.match(entry.pattern);
+    if (!match) continue;
+
+    const params = match.groups || {};
+    let body = {};
+    if ((method === 'POST' || method === 'PATCH' || method === 'PUT') && !entry.rawBody) {
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        return errorResponse(res, err.status || 400, err.code || 'BAD_BODY', err.message);
+      }
+    }
+
+    try {
+      const result = await entry.handler(req, res, { params, query: url.searchParams, body, state });
+      if (result !== undefined && !res.headersSent) jsonResponse(res, 200, result);
+      return undefined;
+    } catch (err) {
+      const status = err.status || 500;
+      const code = err.code || (status === 500 ? 'INTERNAL' : 'REQUEST_FAILED');
+      if (status >= 500) console.error(`[assistant] ${method} ${pathname} failed:`, err);
+      return errorResponse(res, status, code, err.message || 'request failed');
+    }
+  }
+
+  return errorResponse(res, 404, 'NOT_FOUND', `no route for ${method} ${pathname}`);
+}
+
+// --- health / config -------------------------------------------------------
+
+route('GET', /^\/api\/health$/, async (_req, _res, { state }) => {
+  const bots = await listBots();
+  return {
+    ok: true,
+    version: VERSION,
+    now: nowIso(),
+    uptimeSec: Math.round((Date.now() - state.startedAt) / 1000),
+    model: { provider: state.model.provider, model: state.model.model },
+    workspace: state.workspaceDir,
+    dataDir: P.dataDir,
+    bots: bots.length,
+    primaryBotId: bots.find((b) => b.primary)?.id || null,
+    routines: state.routines.list().length,
+    pendingApprovals: state.approvals.list({ status: 'pending' }).length,
+    activeTurns: state.runtime.activeTurns().length,
+    requireAuth: Boolean(state.requireAuth),
+    lanUrl: state.lanUrl,
+    recoveredTurns: state.recoveredTurns.length,
+  };
+});
+
+route('GET', /^\/api\/config$/, async (_req, _res, { state }) => {
+  const bots = await listBots();
+  return {
+    name: state.config.name,
+    persona: state.config.persona,
+    timezone: state.config.timezone,
+    primaryBotId: state.config.primaryBotId || bots.find((b) => b.primary)?.id || null,
+    policy: {
+      autoApproveMedium: Boolean(state.config.policy?.autoApproveMedium),
+      denyPatterns: state.config.policy?.denyPatterns || [],
+      approvalTimeoutMs: state.config.policy?.approvalTimeoutMs || 600000,
+    },
+    model: { provider: state.model.provider, model: state.model.model },
+    workspace: state.workspaceDir,
+    version: VERSION,
+  };
+});
+
+route('GET', /^\/api\/events$/, async (_req, _res, { query, state }) => {
+  return state.bus.recent(Number(query.get('limit')) || 60);
+});
+
+// --- settings / auth / pairing ---------------------------------------------
+//
+// Contract (the UI and the smoke test both depend on it):
+//   GET  /api/settings       {app:{name,version}, model:{provider,baseUrl,model,hasKey},
+//                             server:{host,port,lanUrl,requireAuth}, pairing:{url,code}}
+//   PUT  /api/settings       {provider,baseUrl,model,apiKey?} -> {ok:true, model:{...}}
+//   POST /api/settings/test  -> {ok, latencyMs, mode, error?}
+//   GET  /api/auth           -> {required, authorized, mode:'local'|'token'|'cookie'|'none'}
+//   POST /api/pair           {code} -> {ok:true} + Set-Cookie: desk_session
+//   GET  /api/pairing        -> {url, code}
+
+function pairingInfo(state) {
+  const port = state.port;
+  const url =
+    state.pairingUrl ||
+    state.lanUrl ||
+    `http://${isLoopbackHost(state.host) ? '127.0.0.1' : state.host}:${port}`;
+  return { url, code: state.security.code };
+}
+
+route('GET', /^\/api\/settings$/, async (_req, _res, { state }) => ({
+  app: { name: state.config.name, version: VERSION },
+  model: settingsModule.publicModel(state.settings, state.apiKey),
+  server: {
+    host: state.host,
+    port: state.port,
+    lanUrl: state.lanUrl,
+    requireAuth: Boolean(state.requireAuth),
+  },
+  pairing: pairingInfo(state),
+}));
+
+route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
+  // The documented body is flat: {provider, baseUrl, model, apiKey?}.
+  // Some clients (including our own UI) also try a nested {model:{...}} shape;
+  // accept both instead of silently doing nothing on the nested one.
+  const source = body && typeof body.model === 'object' && body.model !== null ? body.model : body || {};
+
+  const patch = {};
+  if (source.provider !== undefined) patch.provider = source.provider;
+  if (source.baseUrl !== undefined) patch.baseUrl = source.baseUrl;
+  if (source.model !== undefined) patch.model = source.model;
+
+  const apiKeyInput = source.apiKey !== undefined ? source.apiKey : body?.apiKey;
+  if (apiKeyInput !== undefined && typeof apiKeyInput !== 'string') {
+    throw httpError(400, 'INVALID_API_KEY', 'apiKey must be a string (an empty string clears it)');
+  }
+  if (!Object.keys(patch).length && apiKeyInput === undefined) {
+    throw httpError(400, 'SETTINGS_EMPTY', 'body needs {provider, baseUrl, model, apiKey?}');
+  }
+
+  const next = await settingsModule.saveSettings(patch);
+  // Write-only secret: it never comes back out of this endpoint.
+  if (typeof apiKeyInput === 'string') {
+    state.apiKey = await settingsModule.saveSecret(apiKeyInput);
+  }
+  state.settings = next;
+  state.model = settingsModule.createModelFromSettings(state.settings, state.apiKey);
+  state.runtime.setModel(state.model);
+
+  return { ok: true, model: settingsModule.publicModel(state.settings, state.apiKey) };
+});
+
+route('POST', /^\/api\/settings\/test$/, async (_req, _res, { body, state }) => {
+  // Accept optional unsaved overrides so the UI can test before it saves.
+  const source = body && typeof body.model === 'object' && body.model !== null ? body.model : body || {};
+  let settings = state.settings;
+  let apiKey = state.apiKey;
+  if (source.provider !== undefined || source.baseUrl !== undefined || source.model !== undefined) {
+    settings = settingsModule.validateSettings({
+      provider: source.provider ?? state.settings.provider,
+      baseUrl: source.baseUrl ?? state.settings.baseUrl,
+      model: source.model ?? state.settings.model,
+    });
+  }
+  if (typeof source.apiKey === 'string') apiKey = source.apiKey.trim();
+
+  const result = await settingsModule.testConnection({ settings, apiKey, timeoutMs: 20000 });
+  return {
+    ok: result.ok,
+    latencyMs: result.latencyMs,
+    mode: result.mode,
+    ...(result.reply ? { reply: result.reply } : {}),
+    ...(result.error ? { error: result.error } : {}),
+  };
+});
+
+route('GET', /^\/api\/auth$/, async (req, _res, { state }) => {
+  const auth = evaluateAuth(req, state.security);
+  return { required: auth.required, authorized: auth.authorized, mode: auth.mode };
+});
+
+route('POST', /^\/api\/pair$/, async (req, res, { body, state }) => {
+  const limit = state.pairLimiter.check(clientIp(req));
+  if (!limit.allowed) {
+    res.setHeader('retry-after', String(Math.max(1, Math.ceil((limit.retryAfterMs || 0) / 1000))));
+    throw httpError(429, 'PAIR_RATE_LIMITED', 'too many pairing attempts; wait a minute and try again');
+  }
+
+  const code = String(body?.code ?? '').trim();
+  if (!code) throw httpError(400, 'PAIR_CODE_REQUIRED', 'body needs { code }');
+  if (!safeEqual(code, state.security.code)) {
+    throw httpError(401, 'PAIR_INVALID_CODE', 'that pairing code is not valid');
+  }
+
+  res.setHeader('set-cookie', sessionCookieHeader(state.security.token));
+  return { ok: true };
+});
+
+route('GET', /^\/api\/pairing$/, async (_req, _res, { state }) => pairingInfo(state));
+
+// --- bots ------------------------------------------------------------------
+
+route('GET', /^\/api\/bots$/, async () => {
+  const bots = await listBots();
+  // The sidebar wants the last thing each bot said. That costs one tail read per
+  // bot; a broken or unreadable log degrades to preview:null instead of failing
+  // the roster (lastMessagePreview never throws).
+  return Promise.all(
+    bots.map(async (bot) => ({ ...publicBot(bot), preview: await lastMessagePreview(bot.id) })),
+  );
+});
+
+route('POST', /^\/api\/bots$/, async (_req, _res, { body, state }) => {
+  const bot = await createBot(body || {});
+  state.bus.emit({ type: 'roster.changed', scope: 'bots', action: 'create', botId: bot.id });
+  return { bot: publicBot(bot) };
+});
+
+route('PATCH', /^\/api\/bots\/(?<id>[^/]+)$/, async (_req, _res, { params, body, state }) => {
+  const bot = await updateBot(params.id, body || {});
+  if (body?.primary === true) {
+    await setPrimaryBot(bot.id, state.config);
+  }
+  const fresh = await getBot(bot.id);
+  state.bus.emit({ type: 'roster.changed', scope: 'bots', action: 'update', botId: bot.id });
+  return { bot: publicBot(fresh) };
+});
+
+route('DELETE', /^\/api\/bots\/(?<id>[^/]+)$/, async (_req, _res, { params, state }) => {
+  const result = await deleteBot(params.id, state.config);
+  state.bus.emit({ type: 'roster.changed', scope: 'bots', action: 'delete', botId: params.id });
+  return result;
+});
+
+route('POST', /^\/api\/bots\/(?<id>[^/]+)\/primary$/, async (_req, _res, { params, state }) => {
+  const bot = await setPrimaryBot(params.id, state.config);
+  state.config.primaryBotId = params.id;
+  return { bot: publicBot(bot) };
+});
+
+route('GET', /^\/api\/bots\/(?<id>[^/]+)\/messages$/, async (_req, _res, { params, query }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+  const records = await readJsonl(sessionFile(bot.id));
+  const limit = Math.min(Number(query.get('limit')) || 200, 1000);
+  return records.slice(-limit).map((record, index) => toMessageItem(record, index));
+});
+
+route('POST', /^\/api\/bots\/(?<id>[^/]+)\/message$/, async (_req, res, { params, body, state }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+
+  const text = String(body?.text ?? '').trim();
+  if (!text) throw httpError(400, 'EMPTY_MESSAGE', 'text is required');
+  if (text.length > 20000) throw httpError(400, 'MESSAGE_TOO_LONG', 'text is limited to 20000 characters');
+
+  // Answer immediately with the turn id; the turn streams over SSE.
+  const turnId = uid('turn');
+  state.runtime
+    .runTurn({ botId: bot.id, text, source: 'chat', turnId })
+    .catch((err) => {
+      state.bus.emit({ type: 'error', botId: bot.id, turnId, message: err.message });
+    });
+
+  return { turnId, botId: bot.id };
+});
+
+// --- bot avatars -----------------------------------------------------------
+//
+// The contract the UI codes against:
+//   POST   /api/bots/:id/avatar        raw image bytes -> {ok:true, imageUrl}
+//   DELETE /api/bots/:id/avatar        -> {ok:true}
+//   GET    /api/bots/:id/avatar?v=N    -> the bytes (immutable when ?v= is given)
+// One image per bot, stored at data/avatars/<botId>.<ext>; the bot JSON only
+// records shape and colour, so hasImage/imageUrl can never drift from the disk.
+
+route(
+  'POST',
+  /^\/api\/bots\/(?<id>[^/]+)\/avatar$/,
+  async (req, _res, { params }) => {
+    const bot = await getBot(params.id);
+    if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+
+    const declared = avatarMimeFromHeader(req.headers['content-type']);
+    if (!declared) {
+      throw httpError(400, 'AVATAR_BAD_TYPE', `content-type must be one of: ${AVATAR_MIME_TYPES.join(', ')}`);
+    }
+
+    // 2 MB is the limit from the contract; anything bigger is a clear 400, not a
+    // generic 413, so the UI can explain it.
+    const bytes = await readRawBody(req, AVATAR_MAX_BYTES, {
+      code: 'AVATAR_TOO_LARGE',
+      message: `an avatar image must be ${AVATAR_MAX_BYTES / (1024 * 1024)} MB or smaller`,
+    });
+
+    // Trust but verify: the image has to actually start with PNG/JPEG/WebP magic
+    // bytes matching the declared type. Otherwise "avatar.png" containing HTML
+    // would be served back as image/png.
+    const sniffed = sniffImageType(bytes);
+    if (!sniffed) {
+      throw httpError(400, 'AVATAR_BAD_TYPE', 'body is not a PNG, JPEG or WebP image');
+    }
+    if (sniffed !== declared) {
+      throw httpError(400, 'AVATAR_BAD_TYPE', `content-type says ${declared} but the bytes look like ${sniffed}`);
+    }
+
+    const imageUrl = await saveAvatarImage(bot.id, bytes, sniffed);
+    return { ok: true, imageUrl };
+  },
+  { rawBody: true },
+);
+
+route('DELETE', /^\/api\/bots\/(?<id>[^/]+)\/avatar$/, async (_req, _res, { params }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+  // Idempotent on purpose: "make this bot have no image" is a state, not a
+  // transition, and the UI may have raced itself.
+  await removeAvatarImage(bot.id);
+  return { ok: true };
+});
+
+route('GET', /^\/api\/bots\/(?<id>[^/]+)\/avatar$/, async (_req, res, { params, query }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+
+  const found = await findAvatarFile(bot.id);
+  if (!found) {
+    return errorResponse(res, 404, 'AVATAR_NOT_FOUND', `bot "${bot.id}" has no avatar image`);
+  }
+
+  const data = await fsp.readFile(found.file);
+  // Cacheability is the client's call: with ?v=<anything> the URL is effectively
+  // content-addressed, so it can be cached for a year; without one it has to be
+  // revalidated every time.
+  const immutable = query.has('v');
+  res.writeHead(200, {
+    'content-type': avatarMimeForExt(found.ext),
+    'content-length': data.length,
+    'cache-control': immutable ? 'private, max-age=31536000, immutable' : 'no-cache',
+  });
+  res.end(data);
+  return undefined;
+});
+
+route('GET', /^\/api\/bots\/(?<id>[^/]+)\/memory$/, async (_req, _res, { params }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+  const snapshot = await memory.memorySnapshot(bot.id);
+  return {
+    botId: bot.id,
+    memoryFile: relativeToRoot(memory.memoryFileFor(bot.id)),
+    sharedFile: relativeToRoot(memory.memoryFileFor('shared')),
+    memory: snapshot.memory,
+    shared: snapshot.shared,
+    entries: snapshot.entries.map((e) => ({ text: e.text, when: e.ts ? new Date(e.ts).toISOString() : null })),
+  };
+});
+
+route('GET', /^\/api\/bots\/(?<id>[^/]+)$/, async (_req, _res, { params }) => {
+  const bot = await getBot(params.id);
+  if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
+  return { bot: publicBot(bot) };
+});
+
+// --- groups ----------------------------------------------------------------
+//
+// Contract (the UI codes against these shapes; do not rename fields):
+//   GET    /api/groups                [{...group, members:[{id,name,role,avatar}], preview}]
+//   POST   /api/groups                {name, members:[ids], coordinatorId?} -> {group}
+//   GET    /api/groups/:id            -> {group}
+//   PATCH  /api/groups/:id            {name?, members?, coordinatorId?} -> {group}
+//   DELETE /api/groups/:id            -> {ok:true, id, deleted:true}
+//   GET    /api/groups/:id/messages   [{id, ts, kind:'user'|'assistant'|'tool'|'status', from, text?, name?, status?}]
+//   POST   /api/groups/:id/message    {text} -> {turnId}   (the coordinator runs; results go over SSE)
+//
+// Members are stored as bot ids but every response projects them to objects, so
+// the UI never has to join the roster itself.
+
+async function botsById() {
+  return new Map((await listBots()).map((bot) => [bot.id, bot]));
+}
+
+/** Resolve a bot reference (id or display name) to an id, or null. */
+async function resolveBotRef(ref, bots = null) {
+  const key = String(ref ?? '').trim().toLowerCase();
+  if (!key) return null;
+  const list = bots || (await listBots());
+  const bot = list.find((b) => b.id.toLowerCase() === key || b.name.toLowerCase() === key);
+  return bot ? bot.id : null;
+}
+
+/** Resolve POST/PATCH members. Unknown references are a 400, not silently dropped. */
+async function resolveMemberIds(input, bots) {
+  const list = bots || (await listBots());
+  const ids = [];
+  const unknown = [];
+  for (const ref of groups.normalizeMemberIds(input)) {
+    const id = await resolveBotRef(ref, list);
+    if (!id) unknown.push(ref);
+    else if (!ids.includes(id)) ids.push(id);
+  }
+  if (unknown.length) {
+    throw httpError(400, 'GROUP_UNKNOWN_MEMBER', `no bot matches: ${unknown.join(', ')}`);
+  }
+  return ids;
+}
+
+async function publicGroup(group, bots) {
+  const byId = bots instanceof Map ? bots : await botsById();
+  return {
+    id: group.id,
+    name: group.name,
+    members: group.members
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((bot) => ({ id: bot.id, name: bot.name, role: bot.role, avatar: bot.avatar })),
+    coordinatorId: group.coordinatorId,
+    createdAt: group.createdAt,
+    updatedAt: group.updatedAt,
+    preview: await groups.lastGroupPreview(group.id),
+  };
+}
+
+route('GET', /^\/api\/groups$/, async () => {
+  const [all, byId] = await Promise.all([groups.listGroups(), botsById()]);
+  return Promise.all(all.map((group) => publicGroup(group, byId)));
+});
+
+route('POST', /^\/api\/groups$/, async (_req, _res, { body, state }) => {
+  // Size check before name resolution: "too few members" is the useful answer
+  // for a one-member request, even when that one reference is also unknown.
+  groups.assertMemberCount(groups.normalizeMemberIds(body?.members));
+
+  const bots = await listBots();
+  const memberIds = await resolveMemberIds(body?.members, bots);
+
+  let coordinatorId;
+  if (body?.coordinatorId !== undefined && String(body.coordinatorId ?? '').trim() !== '') {
+    coordinatorId = await resolveBotRef(body.coordinatorId, bots);
+    if (!coordinatorId) {
+      throw httpError(400, 'GROUP_UNKNOWN_MEMBER', `no bot matches "${body.coordinatorId}"`);
+    }
+  }
+
+  const group = await groups.createGroup({ name: body?.name, members: memberIds, coordinatorId });
+  state.bus.emit({ type: 'roster.changed', scope: 'groups', action: 'create', groupId: group.id });
+  return { group: await publicGroup(group, bots) };
+});
+
+route('GET', /^\/api\/groups\/(?<id>[^/]+)\/messages$/, async (_req, _res, { params, query }) => {
+  const group = await groups.getGroup(params.id);
+  if (!group) throw httpError(404, 'GROUP_NOT_FOUND', `no group with id "${params.id}"`);
+  const limit = Math.min(Number(query.get('limit')) || 200, 1000);
+  const messages = await groups.readGroupMessages(group.id, { limit });
+  return messages.map(groups.publicGroupMessage);
+});
+
+route('POST', /^\/api\/groups\/(?<id>[^/]+)\/message$/, async (_req, _res, { params, body, state }) => {
+  const group = await groups.getGroup(params.id);
+  if (!group) throw httpError(404, 'GROUP_NOT_FOUND', `no group with id "${params.id}"`);
+
+  const text = String(body?.text ?? '').trim();
+  if (!text) throw httpError(400, 'EMPTY_MESSAGE', 'text is required');
+  if (text.length > 20000) throw httpError(400, 'MESSAGE_TOO_LONG', 'text is limited to 20000 characters');
+
+  // A group can be left in a state it cannot run in (a member was deleted). Say
+  // so plainly instead of failing inside the turn.
+  const blocker = groups.groupRunBlocker(group);
+  if (blocker) throw httpError(blocker.status, blocker.code, blocker.message);
+
+  const bots = await listBots();
+  const byId = new Map(bots.map((bot) => [bot.id, bot]));
+  const coordinator = byId.get(group.coordinatorId);
+  if (!coordinator) throw httpError(409, 'GROUP_NO_COORDINATOR', `"${group.name}" has no coordinator bot`);
+  const members = group.members
+    .filter((id) => byId.has(id))
+    .map((id) => ({ id, name: byId.get(id).name, role: byId.get(id).role }));
+
+  // Answer immediately with the turn id; the turn streams over SSE and its
+  // transcript lands in data/groups/<id>.jsonl.
+  const turnId = uid('turn');
+  state.runtime
+    .runTurn({
+      botId: coordinator.id,
+      text,
+      source: 'group',
+      turnId,
+      group: { id: group.id, name: group.name, coordinatorId: group.coordinatorId, members },
+      groupRole: 'coordinator',
+    })
+    .catch((err) => {
+      state.bus.emit({ type: 'error', groupId: group.id, turnId, message: err.message });
+    });
+
+  return { turnId };
+});
+
+route('PATCH', /^\/api\/groups\/(?<id>[^/]+)$/, async (_req, _res, { params, body, state }) => {
+  const current = await groups.getGroup(params.id);
+  if (!current) throw httpError(404, 'GROUP_NOT_FOUND', `no group with id "${params.id}"`);
+
+  const bots = await listBots();
+  const patch = {};
+  if (body?.name !== undefined) patch.name = body.name;
+  if (body?.members !== undefined) {
+    groups.assertMemberCount(groups.normalizeMemberIds(body.members));
+    patch.members = await resolveMemberIds(body.members, bots);
+  }
+  if (body?.coordinatorId !== undefined) {
+    const coordinatorId = await resolveBotRef(body.coordinatorId, bots);
+    if (!coordinatorId) {
+      throw httpError(400, 'GROUP_UNKNOWN_MEMBER', `no bot matches "${body.coordinatorId}"`);
+    }
+    patch.coordinatorId = coordinatorId;
+  }
+
+  const updated = await groups.updateGroup(current.id, patch);
+  state.bus.emit({ type: 'roster.changed', scope: 'groups', action: 'update', groupId: updated.id });
+  return { group: await publicGroup(updated, bots) };
+});
+
+route('DELETE', /^\/api\/groups\/(?<id>[^/]+)$/, async (_req, _res, { params, state }) => {
+  const removed = await groups.deleteGroup(params.id);
+  state.bus.emit({ type: 'roster.changed', scope: 'groups', action: 'delete', groupId: params.id });
+  return { ok: true, id: removed.id, deleted: true, name: removed.name };
+});
+
+route('GET', /^\/api\/groups\/(?<id>[^/]+)$/, async (_req, _res, { params }) => {
+  const group = await groups.getGroup(params.id);
+  if (!group) throw httpError(404, 'GROUP_NOT_FOUND', `no group with id "${params.id}"`);
+  return { group: await publicGroup(group) };
+});
+
+// --- computer (watch and manage the hub box) --------------------------------
+
+const SHOT_FILE = () => path.join(P.dataDir, 'screen.png');
+
+route('GET', /^\/api\/computer$/, async (_req, _res, { state }) => {
+  const shot = fs.existsSync(SHOT_FILE()) ? SHOT_FILE() : null;
+  const snap = await computerSnapshot({ screenshotPath: shot });
+  let browser = null;
+  try {
+    const { getBrowserManager, browserSupport } = await import('./browser.mjs');
+    const manager = getBrowserManager();
+    const support = browserSupport();
+    browser = {
+      supported: support.supported,
+      transport: support.transport || null,
+      running: Boolean(manager?.isRunning?.()),
+      pid: manager?.pid || null,
+      url: manager?.currentUrl || null,
+    };
+  } catch (err) {
+    browser = { supported: false, error: err.message };
+  }
+  return { ...snap, browser, server: { version: VERSION, port: state.port, host: state.host } };
+});
+
+route('GET', /^\/api\/computer\/screenshot$/, async (_req, res) => {
+  const target = SHOT_FILE();
+  const shot = await captureScreen(target);
+  if (!shot.ok) {
+    res.writeHead(501, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: { code: 'SCREENSHOT_UNAVAILABLE', message: shot.reason } }));
+    return;
+  }
+  const buf = await fsp.readFile(target);
+  res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'content-length': buf.length });
+  res.end(buf);
+});
+
+// --- policy ----------------------------------------------------------------
+
+route('GET', /^\/api\/policy$/, async (_req, _res, { state }) => ({
+  autoApproveAll: Boolean(state.config.policy?.autoApproveAll),
+  autoApproveMedium: Boolean(state.config.policy?.autoApproveMedium),
+  denyPatterns: state.config.policy?.denyPatterns?.length || 0,
+}));
+
+route('PUT', /^\/api\/policy$/, async (_req, _res, { body, state }) => {
+  const next = { ...(state.config.policy || {}) };
+  if (typeof body?.autoApproveAll === 'boolean') next.autoApproveAll = body.autoApproveAll;
+  if (typeof body?.autoApproveMedium === 'boolean') next.autoApproveMedium = body.autoApproveMedium;
+  state.config.policy = next;
+  await writeAssistantConfig({ ...state.config, workspaceDir: undefined });
+  state.bus.emit({ type: 'policy.changed', autoApproveAll: Boolean(next.autoApproveAll) });
+  return {
+    autoApproveAll: Boolean(next.autoApproveAll),
+    autoApproveMedium: Boolean(next.autoApproveMedium),
+  };
+});
+
+// --- approvals -------------------------------------------------------------
+
+route('GET', /^\/api\/approvals$/, async (_req, _res, { query, state }) => {
+  return state.approvals.list({
+    status: query.get('status') || undefined,
+    botId: query.get('botId') || undefined,
+    limit: Number(query.get('limit')) || 100,
+  });
+});
+
+route('POST', /^\/api\/approvals\/(?<id>[^/]+)$/, async (_req, _res, { params, body, state }) => {
+  const decision = body?.decision;
+  if (!decision) throw httpError(400, 'DECISION_REQUIRED', 'body needs { decision: "approve" | "deny" }');
+  const record = state.approvals.decide(params.id, decision, body?.note || '');
+  if (!record) throw httpError(404, 'APPROVAL_NOT_FOUND', `no approval with id "${params.id}"`);
+  if (record.error) throw httpError(409, 'APPROVAL_CONFLICT', record.error);
+
+  state.bus.emit({
+    type: 'approval.decided',
+    approvalId: record.id,
+    botId: record.botId,
+    turnId: record.turnId,
+    status: record.status,
+    note: record.note,
+    late: Boolean(record.late),
+    restored: Boolean(record.restored),
+  });
+
+  // A card restored after a restart has no live turn behind it. The human's
+  // answer still has to mean something, so:
+  //   - a live-chat card that was approved replays the one tool call the human
+  //     actually approved (it provably had not run yet: pending cards never run);
+  //   - an unattended (routine) card is recorded but never replayed - those runs
+  //     were already reported as needs_attention, and "approve & re-run a whole
+  //     routine" would be a different, bigger promise.
+  // Either way the transcript says exactly what happened.
+  if (record.restored) {
+    const ts = nowIso();
+    let note;
+    let replay = null;
+
+    if (record.status === 'approved') {
+      replay = await replayRestoredApproval(state, record);
+      if (replay.ran) {
+        note =
+          `Approved "${record.toolName}" from a card restored after a restart. ` +
+          (replay.ok
+            ? 'The approved tool ran now. The rest of that turn did not resume - ask again for anything else.'
+            : `The approved tool ran now but failed: ${replay.error || 'unknown error'}. The rest of that turn did not resume.`);
+        try {
+          await appendJsonl(sessionFile(record.botId || 'unknown'), {
+            ts,
+            kind: 'tool',
+            name: record.toolName,
+            args: replay.args || {},
+            ok: replay.ok,
+            risk: record.risk || null,
+            output: replay.result ?? null,
+            turnId: record.turnId || null,
+            restored: true,
+          });
+        } catch (err) {
+          console.error('[approvals] could not append the replayed tool result:', err.message);
+        }
+        state.bus.emit({
+          type: 'tool.result',
+          botId: record.botId,
+          turnId: record.turnId,
+          callId: `restored_${record.id}`,
+          name: record.toolName,
+          ok: replay.ok,
+          risk: record.risk,
+          result: replay.result,
+          restored: true,
+        });
+        await audit({
+          kind: 'tool.run',
+          botId: record.botId,
+          turnId: record.turnId,
+          tool: record.toolName,
+          risk: record.risk,
+          decision: 'restored_approval',
+          ok: replay.ok,
+          args: replay.args || {},
+          result: safeJson(replay.result, 1200),
+          restored: true,
+        });
+      } else if (replay.skipped === 'unattended') {
+        note =
+          `Approved "${record.toolName}" from a routine card restored after a restart, but the run that asked ` +
+          'was unattended and already stopped. Nothing was re-run - run the routine again if you still want it.';
+      } else {
+        note = `Approved "${record.toolName}" from a card restored after a restart, but it could not be replayed (${replay.error}). Nothing ran.`;
+      }
+    } else {
+      note = `Denied "${record.toolName}" from a card restored after a restart. Nothing ran.`;
+    }
+
+    if (record.botId) {
+      try {
+        await appendJsonl(sessionFile(record.botId), {
+          ts,
+          kind: 'approval',
+          approvalId: record.id,
+          toolName: record.toolName,
+          risk: record.risk,
+          reason: record.reason || '',
+          decision: record.status,
+          note: record.note || '',
+          args: record.args || '{}',
+          turnId: record.turnId || null,
+          restored: true,
+        });
+        await appendJsonl(sessionFile(record.botId), {
+          ts,
+          kind: 'assistant',
+          text: note,
+          system: true,
+          restored: true,
+          turnId: record.turnId || null,
+          source: 'system',
+        });
+      } catch (err) {
+        console.error('[approvals] could not append the restored decision:', err.message);
+      }
+      state.bus.emit({
+        type: 'message',
+        botId: record.botId,
+        turnId: record.turnId,
+        text: note,
+        final: true,
+        system: true,
+        restored: true,
+      });
+    }
+  }
+  return { approval: record };
+});
+
+/**
+ * Replay the single tool call behind a restored, approved live-chat card.
+ * Returns {ran, ok, result} or {ran:false, skipped|error}.
+ */
+async function replayRestoredApproval(state, record) {
+  if (record.unattended) return { ran: false, skipped: 'unattended' };
+  const tool = state.registry.get(record.toolName);
+  if (!tool) return { ran: false, error: `the tool "${record.toolName}" no longer exists` };
+
+  const bot = await getBot(record.botId);
+  if (!bot) return { ran: false, error: 'the bot that asked no longer exists' };
+  if (!state.registry.isGranted(bot, record.toolName)) {
+    return { ran: false, error: `"${record.toolName}" is no longer granted to ${bot.name}` };
+  }
+
+  let args;
+  try {
+    args = JSON.parse(record.args || '{}');
+  } catch {
+    return { ran: false, error: 'the stored arguments were truncated by the crash' };
+  }
+
+  const ctx = {
+    bot,
+    config: state.config,
+    workspaceDir: state.workspaceDir,
+    turnId: record.turnId,
+    unattended: false,
+    depth: 0,
+    signal: new AbortController().signal,
+    memory,
+    skills,
+    bots: { listBots, getBot },
+    emit: (event) => state.bus.emit({ ...event, botId: bot.id, turnId: record.turnId, restored: true }),
+  };
+
+  try {
+    const result = await tool.run(args, ctx);
+    const ok = result?.ok !== false && !result?.error;
+    return {
+      ran: true,
+      ok,
+      result,
+      args,
+      error: ok ? null : result?.error?.message || 'the tool reported a failure',
+    };
+  } catch (err) {
+    return {
+      ran: true,
+      ok: false,
+      args,
+      result: { error: { code: err.code || 'TOOL_FAILED', message: err.message } },
+      error: err.message,
+    };
+  }
+}
+
+/** JSON for the audit log, bounded like the agent's own audit records. */
+function safeJson(value, max = 1200) {
+  try {
+    const json = JSON.stringify(value);
+    return json.length > max ? `${json.slice(0, max)}...` : json;
+  } catch {
+    return '(unserialisable)';
+  }
+}
+
+// --- routines --------------------------------------------------------------
+
+route('GET', /^\/api\/routines$/, async (_req, _res, { state }) => {
+  return state.routines.list().map(publicRoutine);
+});
+
+route('POST', /^\/api\/routines$/, async (_req, _res, { body, state }) => {
+  const created = await state.routines.create(body || {});
+  return { routine: publicRoutine(created) };
+});
+
+route('PATCH', /^\/api\/routines\/(?<id>[^/]+)$/, async (_req, _res, { params, body, state }) => {
+  const updated = await state.routines.update(params.id, body || {});
+  return { routine: publicRoutine(updated) };
+});
+
+route('DELETE', /^\/api\/routines\/(?<id>[^/]+)$/, async (_req, _res, { params, state }) => {
+  return state.routines.remove(params.id);
+});
+
+route('POST', /^\/api\/routines\/(?<id>[^/]+)\/test$/, async (_req, _res, { params, state }) => {
+  const result = await state.routines.runNow(params.id, { trigger: 'test' });
+  return { routine: publicRoutine(result.routine), run: result.run };
+});
+
+// --- skills ----------------------------------------------------------------
+
+route('GET', /^\/api\/skills$/, async (_req, _res, { query }) => {
+  const botId = query.get('botId');
+  const bot = botId ? await getBot(botId) : null;
+  const list = bot ? await skills.listSkillsForBot(bot.skills) : await skills.listSkills();
+  return list;
+});
+
+route('GET', /^\/api\/skills\/(?<name>[^/]+)$/, async (_req, _res, { params }) => {
+  const skill = await skills.readSkill(params.name);
+  if (!skill) throw httpError(404, 'SKILL_NOT_FOUND', `no skill named "${params.name}"`);
+  return { skill: { ...skill, raw: skill.raw } };
+});
+
+// --- audit / turns ---------------------------------------------------------
+
+route('GET', /^\/api\/audit$/, async (_req, _res, { query }) => {
+  return readAudit({ limit: Math.min(Number(query.get('limit')) || 100, 500) });
+});
+
+route('GET', /^\/api\/turns$/, async (_req, _res, { state }) => {
+  return state.runtime.activeTurns();
+});
+
+route('POST', /^\/api\/turns\/(?<id>[^/]+)\/cancel$/, async (_req, _res, { params, state }) => {
+  const cancelled = state.runtime.cancel(params.id);
+  if (!cancelled) throw httpError(404, 'TURN_NOT_FOUND', `no active turn "${params.id}"`);
+  return { cancelled: true, turnId: params.id };
+});
+
+// --- SSE -------------------------------------------------------------------
+
+route('GET', /^\/api\/stream$/, async (req, res, { query, state }) => {
+  const botId = query.get('botId') || '';
+  // A group stream carries only events tagged with that groupId. Turn events of
+  // the coordinator's group turn set it; private bot_message replies do not.
+  const groupId = query.get('groupId') || '';
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write(`retry: 2000\n: connected ${nowIso()}\n\n`);
+
+  let closed = false;
+  // Roster edits are global: every window needs them regardless of which bot
+  // or group it happens to be looking at.
+  const GLOBAL_EVENTS = new Set(['roster.changed']);
+  const send = (event) => {
+    if (closed) return;
+    if (!GLOBAL_EVENTS.has(event.type)) {
+      if (botId && event.botId && event.botId !== botId) return;
+      if (groupId && event.groupId !== groupId) return;
+    }
+    try {
+      // One `data:` line per event; the UI reads event.type from the payload.
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      closed = true;
+    }
+  };
+
+  const unsubscribe = state.bus.subscribe(send);
+
+  // Heartbeat keeps proxies and idle TCP connections from dropping the stream.
+  const heartbeat = setInterval(() => {
+    if (closed) return;
+    try {
+      res.write(`: ping ${Date.now()}\n\n`);
+    } catch {
+      closed = true;
+    }
+  }, 15000);
+  if (typeof heartbeat.unref === 'function') heartbeat.unref();
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('close', cleanup);
+
+  // Never return: this response is owned by the stream until the client leaves.
+  return undefined;
+});
+
+// ---------------------------------------------------------------------------
+// response helpers
+// ---------------------------------------------------------------------------
+
+function jsonResponse(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+  });
+  res.end(body);
+}
+
+function errorResponse(res, status, code, message) {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  jsonResponse(res, status, { error: { code, message } });
+}
+
+function httpError(status, code, message) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  return err;
+}
+
+async function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      const err = new Error(`request body exceeds ${maxBytes} bytes`);
+      err.status = 413;
+      err.code = 'BODY_TOO_LARGE';
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const err = new Error('request body is not valid JSON');
+    err.status = 400;
+    err.code = 'BAD_JSON';
+    throw err;
+  }
+}
+
+/**
+ * Read a request body as raw bytes, for uploads that are not JSON.
+ *
+ * An oversized body is drained (without being buffered) before the error is
+ * returned: if we stopped reading the moment the limit was passed, a browser
+ * uploading 3 MB would usually see a connection reset instead of a JSON
+ * AVATAR_TOO_LARGE. Dropping the chunks keeps memory bounded; the socket only
+ * carries bytes the client chose to send.
+ */
+async function readRawBody(req, maxBytes, { code = 'BODY_TOO_LARGE', message } = {}) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size <= maxBytes) chunks.push(chunk);
+  }
+  if (size > maxBytes) {
+    const err = new Error(message || `request body exceeds ${maxBytes} bytes`);
+    err.status = 400;
+    err.code = code;
+    throw err;
+  }
+  return Buffer.concat(chunks);
+}
+
+/** `image/jpg` is what some clients send; treat it as jpeg. */
+function avatarMimeFromHeader(value) {
+  const declared = String(value || '').split(';')[0].trim().toLowerCase();
+  if (declared === 'image/jpg') return 'image/jpeg';
+  return AVATAR_MIME_TYPES.includes(declared) ? declared : null;
+}
+
+/** The first few bytes are enough to tell these three formats apart. */
+function sniffImageType(bytes) {
+  if (!bytes || bytes.length < 12) return null;
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// static files
+// ---------------------------------------------------------------------------
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+};
+
+async function serveStatic(req, res, pathname) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return errorResponse(res, 405, 'METHOD_NOT_ALLOWED', 'static files are GET/HEAD only');
+  }
+
+  const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  const target = path.resolve(P.publicDir, relative);
+
+  // Path traversal guard: the resolved file must stay inside public/.
+  const publicRoot = P.publicDir.endsWith(path.sep) ? P.publicDir : P.publicDir + path.sep;
+  if (target !== P.publicDir && !target.startsWith(publicRoot)) {
+    return errorResponse(res, 403, 'FORBIDDEN', 'path escapes the public directory');
+  }
+
+  let data;
+  try {
+    data = await fsp.readFile(target);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EISDIR') {
+      return errorResponse(res, 404, 'NOT_FOUND', `no file at ${pathname}`);
+    }
+    throw err;
+  }
+
+  const type = MIME[path.extname(target).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, {
+    'content-type': type,
+    'content-length': data.length,
+    'cache-control': 'no-cache',
+  });
+  if (req.method === 'HEAD') return res.end();
+  return res.end(data);
+}
+
+// ---------------------------------------------------------------------------
+// projections (what the UI is allowed to see)
+// ---------------------------------------------------------------------------
+
+function publicBot(bot) {
+  return {
+    id: bot.id,
+    name: bot.name,
+    avatarColor: bot.avatarColor,
+    avatar: bot.avatar,
+    role: bot.role,
+    persona: bot.persona,
+    primary: bot.primary,
+    tools: bot.tools,
+    skills: bot.skills,
+    policy: bot.policy,
+    createdAt: bot.createdAt,
+  };
+}
+
+function publicRoutine(routine) {
+  return {
+    id: routine.id,
+    botId: routine.botId,
+    name: routine.name,
+    instruction: routine.instruction,
+    schedule: routine.schedule,
+    kind: routine.kind,
+    timezone: routine.timezone,
+    enabled: routine.enabled,
+    lastRun: routine.lastRun,
+    nextRun: routine.nextRun,
+    lastStatus: routine.lastStatus,
+    runs: routine.runs.slice(-10),
+  };
+}
+
+/** Session record -> one chat bubble / chip. */
+function toMessageItem(record, index) {
+  const base = { id: `${record.turnId || 'turn'}-${index}`, ts: record.ts, turnId: record.turnId || null };
+  switch (record.kind) {
+    case 'user':
+      return { ...base, role: 'user', text: record.text, source: record.source || 'chat' };
+    case 'assistant':
+      return { ...base, role: 'assistant', text: record.text, system: Boolean(record.system), source: record.source || 'chat' };
+    case 'tool':
+      return {
+        ...base,
+        role: 'tool',
+        name: record.name,
+        args: record.args || {},
+        ok: Boolean(record.ok),
+        risk: record.risk || null,
+        denied: Boolean(record.denied),
+        needsApproval: Boolean(record.needsApproval),
+        reason: record.reason || null,
+        output: record.output ?? null,
+      };
+    case 'approval':
+      return {
+        ...base,
+        role: 'approval',
+        approvalId: record.approvalId || null,
+        tool: record.toolName,
+        risk: record.risk || null,
+        reason: record.reason || '',
+        decision: record.decision || null,
+        note: record.note || '',
+        args: record.args || '{}',
+      };
+    case 'turn':
+      return { ...base, role: 'status', status: record.status, summary: record.summary, steps: record.steps };
+    default:
+      return { ...base, role: 'system', text: record.text || record.kind };
+  }
+}
+
+function relativeToRoot(file) {
+  return path.relative(P.root, file).split(path.sep).join('/');
+}
+
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
+export async function startServer({ port = DEFAULT_PORT, host = HOST } = {}) {
+  // Binding beyond loopback is a deliberate, loud decision. Refusing by default
+  // is the whole security posture: "no authentication" used to be safe because
+  // the socket was local, and now that auth exists it is still opt-in.
+  if (!isLoopbackHost(host) && !remoteAccessAllowed()) {
+    const err = new Error(
+      `refusing to bind ${host}: remote access is disabled. ` +
+        'Set ASSIST_ALLOW_REMOTE=1 to expose this assistant to your network (pairing is still required).',
+    );
+    err.code = 'REMOTE_NOT_ALLOWED';
+    throw err;
+  }
+
+  const { server, state } = await createAssistant({ port, host });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.removeListener('error', reject);
+      resolve();
+    });
+  });
+
+  const actualPort = server.address().port;
+  const url = `http://${host}:${actualPort}`;
+  const remote = !isLoopbackHost(host);
+  // A wildcard bind has no address of its own; pick the LAN interface a phone
+  // would plausibly be on. A specific bind knows its own address.
+  const wildcard = ['0.0.0.0', '::', '[::]', ''].includes(String(host));
+  const lanAddress = wildcard ? preferredLanAddress() : host;
+  const lanUrl = remote ? lanUrlFor(lanAddress, actualPort) : null;
+
+  // Routes need the real port to build pairing URLs; state is shared by closure.
+  state.port = actualPort;
+  state.host = host;
+  state.lanUrl = lanUrl;
+  state.pairingUrl = lanUrl || `http://${isLoopbackHost(host) ? '127.0.0.1' : host}:${actualPort}`;
+
+  // Machine-readable readiness line (parsed by the smoke test); human logs go
+  // to stderr so stdout stays clean.
+  console.log(
+    JSON.stringify({
+      event: 'ready',
+      port: actualPort,
+      url,
+      provider: state.model.provider,
+      workspace: state.workspaceDir,
+      lanUrl,
+      requireAuth: Boolean(state.requireAuth),
+    }),
+  );
+  console.error(`[assistant] listening on ${url} (model: ${state.model.provider}/${state.model.model})`);
+  console.error(`[assistant] workspace: ${state.workspaceDir}`);
+  console.error(`[assistant] data:      ${P.dataDir}`);
+
+  // Always print where a phone should connect to, and say plainly whether that
+  // is actually reachable. The requirement is "print the LAN URL on boot".
+  const candidates = listLanAddresses();
+  const shownAddress = remote ? lanAddress : preferredLanAddress();
+  if (remote) {
+    console.error(
+      `[assistant] WARNING: remote access enabled (ASSIST_ALLOW_REMOTE=1). ` +
+        'Anyone on this network who pairs with the code can use this assistant.',
+    );
+    if (lanUrl) {
+      console.error(`[assistant] LAN URL: ${lanUrl}`);
+    } else {
+      console.error(`[assistant] LAN URL: (bound to ${host}, but no non-internal IPv4 address was found)`);
+    }
+  } else {
+    const wouldBe = shownAddress ? lanUrlFor(shownAddress, actualPort) : '(no LAN address found)';
+    console.error(`[assistant] LAN URL: ${wouldBe} (not listening there - set ASSIST_ALLOW_REMOTE=1 and HOST=0.0.0.0)`);
+  }
+  if (candidates.length > 1) {
+    const others = candidates.filter((entry) => entry.address !== shownAddress);
+    if (others.length) {
+      console.error(
+        `[assistant] other interfaces: ${others.map((entry) => lanUrlFor(entry.address, actualPort)).join(', ')}`,
+      );
+    }
+  }
+  console.error(`[assistant] pairing code: ${state.security.code} (also shown in Settings)`);
+
+  let closing = false;
+  const shutdown = (signal) => {
+    if (closing) return;
+    closing = true;
+    console.error(`[assistant] ${signal} received - shutting down`);
+    try {
+      state.routines.stop();
+      state.runtime.cancelAll('server shutting down');
+      state.approvals.shutdown('server shutting down');
+    } catch (err) {
+      console.error('[assistant] shutdown cleanup failed:', err.message);
+    }
+    server.close(() => {
+      console.error('[assistant] closed');
+      process.exit(0);
+    });
+    // SSE connections are long-lived by design: close them so server.close()
+    // can actually finish instead of waiting for a browser tab to go away.
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+    // If a socket refuses to close, leave anyway.
+    const force = setTimeout(() => process.exit(0), 3000);
+    if (typeof force.unref === 'function') force.unref();
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('unhandledRejection', (reason) => {
+    console.error('[assistant] unhandled rejection:', reason);
+  });
+
+  return { server, state, port: actualPort, url };
+}
+
+const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isMain) {
+  startServer().catch((err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[assistant] port ${DEFAULT_PORT} is already in use. Set PORT to a free port (PORT=0 picks one).`);
+    } else if (err.code === 'REMOTE_NOT_ALLOWED') {
+      console.error(`[assistant] ${err.message}`);
+    } else {
+      console.error('[assistant] failed to start:', err);
+    }
+    process.exit(1);
+  });
+}

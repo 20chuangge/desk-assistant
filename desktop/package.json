@@ -1,0 +1,23 @@
+{
+  "name": "desk-desktop",
+  "productName": "Desk",
+  "version": "1.0.0",
+  "description": "Desk - a personal AI assistant with its own computer",
+  "private": true,
+  "main": "main.mjs",
+  "type": "module",
+  "author": {
+    "name": "Desk"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node make-icons.mjs",
+    "build:win": "electron-builder --win --x64",
+    "build:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  }
+}

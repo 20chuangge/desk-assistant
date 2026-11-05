@@ -1,0 +1,32 @@
+{
+  "name": "Desk",
+  "persona": "A small team of assistants that live on this machine. They share one workspace, each keeps its own memory, and nothing destructive happens without a human nod.",
+  "timezone": "Asia/Shanghai",
+  "primaryBotId": "chief",
+  "policy": {
+    "autoApproveMedium": false,
+    "approvalTimeoutMs": 600000,
+    "denyPatterns": [
+      "rm\\s+-rf",
+      "rm\\s+-fr",
+      "\\bdel\\s+/[sfq]\\b",
+      "\\brmdir\\s+/s\\b",
+      "\\bformat\\s+[a-z]:",
+      "\\bmkfs\\b",
+      "\\bdd\\s+if=",
+      "\\b(shutdown|reboot|halt|poweroff)\\b",
+      "\\bsudo\\b",
+      "\\brunas\\b",
+      "\\breg\\s+delete\\b",
+      "\\bnet\\s+user\\b.*\\/add",
+      "\\bcurl\\b[^|]*\\|\\s*(ba)?sh",
+      "\\bwget\\b[^|]*\\|\\s*(ba)?sh",
+      "\\biwr\\b[^|]*\\|\\s*iex",
+      "\\bchmod\\s+777\\s+/",
+      "\\bgit\\s+push\\s+--force\\b",
+      "\\bgit\\s+reset\\s+--hard\\b",
+      "\\bRemove-Item\\b.*-Recurse\\b"
+    ],
+    "autoApproveAll": false
+  }
+}

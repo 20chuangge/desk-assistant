@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Desk · 离线</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; place-items: center; padding: 24px;
+    background: #0b0d12; color: #e6e8ee;
+    font: 15px/1.6 "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .card { max-width: 420px; text-align: center; }
+  img { width: 88px; height: 88px; border-radius: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  h1 { font-size: 20px; margin: 20px 0 8px; letter-spacing: -.01em; }
+  p { margin: 0 0 8px; color: #9aa3b2; }
+  button {
+    margin-top: 20px; padding: 12px 20px; border-radius: 12px; border: 1px solid #2a3040;
+    background: #171b24; color: #e6e8ee; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #1d2230; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img src="icons/icon-192.png" alt="Desk">
+    <h1>连不上你的电脑</h1>
+    <p>Desk 的工作跑在你的电脑上，这个页面现在拿不到它。</p>
+    <p>确认那台电脑还开着、Desk 还在运行，然后重试。</p>
+    <button onclick="location.reload()">重试</button>
+  </div>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ExportOptions.plist for `xcodebuild -exportArchive`.
+
+  This committed copy is a template: `__TEAM_ID__` / `__PROFILE_NAME__` are
+  replaced by .github/workflows/ios.yml from the TEAM_ID and
+  PROVISIONING_PROFILE_NAME secrets. For a local signed build either edit the
+  values below or generate this file with `npx cap build ios`.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.desk.assistant</key>
+		<string>__PROFILE_NAME__</string>
+	</dict>
+</dict>
+</plist>
