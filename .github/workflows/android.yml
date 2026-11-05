@@ -24,9 +24,9 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: mobile
+# NOTE: no workflow-level `defaults.run.working-directory`. GitHub validates that
+# path during "Set up job", *before* actions/checkout runs, so `mobile/` does not
+# exist yet and the job dies with zero steps. Each step sets it explicitly.
 
 jobs:
   apk:
@@ -61,12 +61,15 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install dependencies
+        working-directory: mobile
         run: npm ci
 
       - name: Build webDir from public/
+        working-directory: mobile
         run: npm run sync:www
 
       - name: Sync Capacitor (plugins + web assets into android/)
+        working-directory: mobile
         run: npx cap sync android
 
       - name: Decode release keystore
@@ -95,6 +98,7 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Show what was produced
+        working-directory: mobile
         run: |
           find android/app/build/outputs/apk -name '*.apk' -printf '%p  %s bytes\n' | sort
 

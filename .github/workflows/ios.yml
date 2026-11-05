@@ -34,9 +34,8 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: mobile
+# NOTE: no workflow-level `defaults.run.working-directory` — it is validated
+# during "Set up job", before checkout, so the directory does not exist yet.
 
 jobs:
   ipa:
@@ -68,12 +67,15 @@ jobs:
           xcode-select -p
 
       - name: Install dependencies
+        working-directory: mobile
         run: npm ci
 
       - name: Build webDir from public/
+        working-directory: mobile
         run: npm run sync:www
 
       - name: Sync Capacitor (plugins + web assets into ios/)
+        working-directory: mobile
         run: npx cap sync ios
 
       - name: Install CocoaPods dependencies
@@ -83,6 +85,7 @@ jobs:
           pod install
 
       - name: List schemes
+        working-directory: mobile
         run: xcodebuild -list -workspace ios/App/App.xcworkspace
 
       - name: Import signing certificate + provisioning profile
@@ -116,6 +119,7 @@ jobs:
 
       - name: Render ExportOptions.plist
         if: ${{ env.CERT_P12_BASE64 != '' }}
+        working-directory: mobile
         run: |
           set -euo pipefail
           PROFILE_NAME="${PROVISIONING_PROFILE_NAME:-}"
@@ -131,6 +135,7 @@ jobs:
 
       - name: Archive (unsigned)
         if: ${{ env.CERT_P12_BASE64 == '' }}
+        working-directory: mobile
         run: |
           xcodebuild \
             -workspace ios/App/App.xcworkspace \
@@ -144,6 +149,7 @@ jobs:
 
       - name: Archive (signed)
         if: ${{ env.CERT_P12_BASE64 != '' }}
+        working-directory: mobile
         run: |
           xcodebuild \
             -workspace ios/App/App.xcworkspace \
