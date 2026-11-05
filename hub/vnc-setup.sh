@@ -8,6 +8,7 @@
 #   3. display 不一定是 :0（Wayland→Xorg 切换后可能是 :1）→ 运行时自动探测
 #   4. /run/user/*/gdm/Xauthority 只有 root 能读 → 服务跑成 root
 #   5. systemd 启动时桌面还没起来 → -loop 一直等
+#   6. root 进程用 MIT-SHM 抓用户会话会被拒（BadAccess）→ -noshm
 #
 #  用法：  sudo bash hub/vnc-setup.sh '你的VNC密码'
 # =============================================================================
@@ -49,7 +50,7 @@ for f in /run/user/*/gdm/Xauthority ${TARGET_HOME}/.Xauthority; do
   [ -r "\$f" ] && { AUTH="\$f"; break; }
 done
 exec /usr/bin/x11vnc -display ":\$D" \${AUTH:+-auth "\$AUTH"} \\
-  -forever -shared -noxdamage -repeat -loop \\
+  -forever -shared -noxdamage -repeat -loop -noshm \\
   -rfbauth ${TARGET_HOME}/.vnc/passwd -rfbport 5900 -o /var/log/desk-vnc.log
 EOF
 sudo chmod +x /usr/local/bin/desk-vnc-start
