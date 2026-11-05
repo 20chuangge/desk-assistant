@@ -43,3 +43,7 @@ release/
 # local screen captures / test output
 workspace/artifacts/
 workspace/downloads/
+
+# scratch
+_*.html
+

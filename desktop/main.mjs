@@ -37,6 +37,18 @@ let remoteHub = '';
 
 const HUB_FILE = path.join(app.getPath('userData'), 'hub.json');
 
+// A packaged GUI app has nowhere to print. Anything that kills it before the
+// window exists would otherwise be invisible, so keep a small boot log.
+const BOOT_LOG = path.join(app.getPath('userData'), 'startup.log');
+function bootLog(message) {
+  try {
+    fs.appendFileSync(BOOT_LOG, `${new Date().toISOString()} ${message}\n`);
+  } catch { /* ignore */ }
+}
+process.on('uncaughtException', (err) => bootLog(`uncaught ${err?.stack || err}`));
+process.on('unhandledRejection', (err) => bootLog(`rejected ${err?.stack || err}`));
+bootLog(`boot packaged=${isPackaged} argv=${process.argv.slice(1).join(' ')}`);
+
 function readHub() {
   try {
     const raw = JSON.parse(fs.readFileSync(HUB_FILE, 'utf8'));
@@ -252,7 +264,12 @@ function createWindowFor(url) {
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
     show: false,
+    // No OS title bar: the web UI draws its own (Grok-Bot style). The thin
+    // native frame on Windows also goes away with `frame: false`.
+    frame: false,
+    titleBarStyle: 'hidden',
     webPreferences: {
+      preload: path.join(__dirname, 'shell-preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -269,7 +286,58 @@ function createWindowFor(url) {
     return { action: 'deny' };
   });
 
-  win.loadURL(url);
+  // Frameless: the page draws the title bar and its own traffic buttons.
+  // `?shell=desk` tells the web UI it is inside the desktop shell (it is also
+  // opened in plain browsers, where the buttons must not appear).
+  const target = new URL(url);
+  target.searchParams.set('shell', 'desk');
+  win.loadURL(target.toString());
+
+  // Safety net for an older UI (e.g. a hub that has not been updated yet):
+  // without traffic buttons a frameless window cannot be closed. The page's own
+  // markup wins when present; this only fills the gap.
+  win.webContents.on('did-finish-load', async () => {
+    try {
+      const hasBridge = await win.webContents.executeJavaScript('typeof window.deskShell');
+      if (hasBridge !== 'object') {
+        bootLog('shell preload missing — window controls unavailable');
+        return;
+      }
+      bootLog('shell bridge ready (frameless title bar)');
+    } catch {
+      return;
+    }
+    win.webContents.executeJavaScript(`
+      (() => {
+        if (!window.deskShell || !document.body || document.getElementById('winbtns')) return;
+        document.body.classList.add('shell');
+        const style = document.createElement('style');
+        style.textContent = \`
+          body.shell .topbar { -webkit-app-region: drag; }
+          body.shell .topbar button, body.shell .topbar .pill { -webkit-app-region: no-drag; }
+          .winbtns { display: inline-flex; gap: 2px; margin-left: 6px; }
+          .winbtns button { width: 36px; height: 28px; border: 0; border-radius: 7px;
+            background: transparent; color: #98a1b2; font: 13px system-ui; cursor: default; }
+          .winbtns button:hover { background: rgba(255,255,255,.07); color: #e6e8ee; }
+          .winbtns .win-close:hover { background: #e11d48; color: #fff; }
+        \`;
+        document.head.appendChild(style);
+        const box = document.createElement('div');
+        box.className = 'winbtns';
+        box.id = 'winbtns';
+        box.innerHTML = '<button data-win="min">&#8211;</button>' +
+          '<button data-win="max">&#9633;</button>' +
+          '<button data-win="close" class="win-close">&#10005;</button>';
+        box.addEventListener('click', (e) => {
+          const act = e.target.closest('[data-win]')?.dataset.win;
+          if (act === 'min') window.deskShell.minimize();
+          else if (act === 'max') window.deskShell.toggleMaximize();
+          else if (act === 'close') window.deskShell.close();
+        });
+        (document.querySelector('header.topbar') || document.body).appendChild(box);
+      })();
+    `).catch(() => { /* a page that blocks scripts just keeps Alt+F4 */ });
+  });
   return win;
 }
 
@@ -345,6 +413,23 @@ function buildMenu() {
     },
   ]));
 }
+
+// ---------------------------------------------------------------------------
+// window controls (frameless window: the page asks, we act)
+// ---------------------------------------------------------------------------
+
+ipcMain.on('shell:minimize', (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.minimize();
+});
+ipcMain.on('shell:toggle-maximize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  else win.maximize();
+});
+ipcMain.on('shell:close', (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
 
 // ---------------------------------------------------------------------------
 // lifecycle

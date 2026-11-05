@@ -803,6 +803,19 @@ const SHOT_FILE = () => path.join(P.dataDir, 'screen.png');
 route('GET', /^\/api\/computer$/, async (_req, _res, { state }) => {
   const shot = fs.existsSync(SHOT_FILE()) ? SHOT_FILE() : null;
   const snap = await computerSnapshot({ screenshotPath: shot });
+  // noVNC asks for the VNC password every single time, which is unbearable when
+  // the viewer opens in a panel. Hand it the password once via the URL.
+  // Source: DESK_VNC_PASSWORD, or data/vnc.json written by the installer.
+  let vncPass = process.env.DESK_VNC_PASSWORD || '';
+  if (!vncPass) {
+    try {
+      vncPass = JSON.parse(fs.readFileSync(path.join(P.dataDir, 'vnc.json'), 'utf8')).password || '';
+    } catch { /* not configured */ }
+  }
+  if (vncPass && snap.desktop?.url) {
+    snap.desktop.url += `&password=${encodeURIComponent(vncPass)}`;
+    snap.desktop.hasPassword = true;
+  }
   let browser = null;
   try {
     const { getBrowserManager, browserSupport } = await import('./browser.mjs');

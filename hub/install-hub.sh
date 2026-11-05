@@ -122,6 +122,13 @@ chown -R "$RUN_USER:$RUN_USER" "$RUN_HOME/.vnc"
 chmod 700 "$RUN_HOME/.vnc"
 chmod 600 "$RUN_HOME/.vnc/passwd"
 
+# Desk 的「接管桌面」会把 noVNC 嵌进面板；noVNC 每次都要输密码很烦，
+# 所以把明文密码交给 Hub（只存在本机的 data/vnc.json，600 权限）。
+mkdir -p "$APP_DIR/data"
+printf '{"password":"%s"}\n' "$VNC_PASS" > "$APP_DIR/data/vnc.json"
+chmod 600 "$APP_DIR/data/vnc.json"
+chown "$RUN_USER:$RUN_USER" "$APP_DIR/data/vnc.json"
+
 say "4/7 决定桌面模式"
 HAS_X=0
 if ls /tmp/.X11-unix/X* >/dev/null 2>&1; then HAS_X=1; fi

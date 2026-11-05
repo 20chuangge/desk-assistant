@@ -177,12 +177,12 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: clamp(256px, 21vw, 312px) minmax(0, 1fr) clamp(288px, 27vw, 384px);
+    grid-template-columns: var(--side-w, clamp(256px, 21vw, 312px)) minmax(0, 1fr) var(--panel-w, clamp(288px, 27vw, 384px));
   }
   /* Grok-Bot-like default: sidebar + conversation only. The work panel is a
      drawer you open when you actually want to watch the machinery. */
   body.panel-hidden .main {
-    grid-template-columns: clamp(256px, 21vw, 312px) minmax(0, 1fr);
+    grid-template-columns: var(--side-w, clamp(256px, 21vw, 312px)) minmax(0, 1fr);
   }
   body.panel-hidden #panel { display: none; }
   @media (max-width: 860px) {
@@ -584,10 +584,73 @@
      --------------------------------------------------------------------- */
   .panel {
     min-height: 0; display: flex; flex-direction: column;
+    position: relative;
     border-left: 1px solid var(--border-soft);
     background: rgba(10, 12, 17, 0.5);
   }
   .grip { display: none; }
+
+  /* Drag either divider to resize: sidebar (left) and work panel (right).
+     Widths are remembered in localStorage; double-click restores the default. */
+  .edge-resizer {
+    position: absolute; top: 0; bottom: 0; width: 10px;
+    cursor: col-resize; z-index: 6; background: transparent; touch-action: none;
+  }
+  .edge-resizer::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    transition: background 120ms var(--ease);
+  }
+  .edge-resizer:hover::after, body.resizing .edge-resizer::after { background: var(--accent); }
+  .panel-resizer { left: -5px; }
+  .panel-resizer::after { left: 4px; }
+  .sidebar-resizer { right: -5px; }
+  .sidebar-resizer::after { right: 4px; }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing iframe { pointer-events: none; }
+
+  /* "Whole window" mode for the desktop tab (Grok-Bot style): the work panel
+     covers the window and only the viewer remains. */
+  body.panel-max #sidebar,
+  body.panel-max .main > .chat,
+  body.panel-max .scrim { display: none !important; }
+  body.panel-max .main { grid-template-columns: minmax(0, 1fr) !important; }
+  body.panel-max #panel {
+    position: static; border-left: 0; background: var(--bg);
+    width: 100%; height: 100%;
+  }
+  body.panel-max #panel .panel-body {
+    display: flex; flex-direction: column; overflow: hidden; padding: 0; min-height: 0;
+  }
+  body.panel-max #pane-computer.active { flex: 1; min-height: 0; }
+  body.panel-max #pc-screen-wrap,
+  body.panel-max #pc-stats,
+  body.panel-max #pc-procs,
+  body.panel-max #pane-computer > .section-head:first-of-type { display: none !important; }
+  body.panel-max #pane-computer .section-head { margin: 8px 12px; }
+  body.panel-max #pane-computer .pc-vnc { flex: 1; min-height: 0; margin: 0; }
+  body.panel-max #pane-computer .pc-vnc iframe {
+    width: 100%; height: 100%; min-height: 60vh; aspect-ratio: auto; border-radius: 0; border: 0;
+  }
+  /* Belt and braces: in fullscreen the viewer becomes a fixed overlay, so it
+     cannot be squeezed by any parent height calculation. */
+  body.panel-max #pc-vnc-wrap {
+    position: fixed; inset: 0; z-index: 90; margin: 0; background: #05070b;
+  }
+  body.panel-max #pc-vnc-wrap .pc-vnc-frame {
+    display: flex; flex-direction: column; height: 100%; gap: 0; padding: 0;
+  }
+  body.panel-max #pc-vnc-wrap iframe {
+    flex: 1; width: 100%; height: 100%; border: 0; border-radius: 0; aspect-ratio: auto;
+  }
+  body.panel-max #pc-vnc-wrap .row-note { display: none; }
+  .pc-exit {
+    position: fixed; right: 16px; bottom: 16px; z-index: 95;
+    background: rgba(20, 24, 33, .92); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 14px; font-size: 12.5px; cursor: pointer;
+  }
+  .pc-exit:hover { background: var(--accent); color: #fff; }
+  body.panel-max #pc-max { background: var(--accent); color: #fff; border-color: transparent; }
   .tabs { display: flex; align-items: center; gap: 2px; padding: 10px 10px 0; flex: none; }
   .tab {
     flex: 1; min-height: 36px; padding: 7px 4px; text-align: center;
@@ -662,6 +725,24 @@
     border-color: rgba(251, 191, 36, .38); cursor: pointer;
   }
   .pill.warn[hidden] { display: none; }
+
+  /* Frameless desktop shell: the page is the title bar. Everything in the
+     topbar drags the window except the actual controls. Hidden in a browser. */
+  body.shell .topbar { -webkit-app-region: drag; user-select: none; }
+  body.shell .topbar button,
+  body.shell .topbar .pill,
+  body.shell .topbar a,
+  body.shell .topbar input { -webkit-app-region: no-drag; }
+  .winbtns { display: none; }
+  body.shell .winbtns { display: inline-flex; gap: 2px; margin-left: 6px; }
+  .winbtns button {
+    width: 36px; height: 28px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--muted);
+    font-size: 13px; line-height: 1; cursor: default;
+    display: grid; place-items: center;
+  }
+  .winbtns button:hover { background: rgba(255,255,255,.07); color: var(--text); }
+  .winbtns .win-close:hover { background: #e11d48; color: #fff; }
 
   /* account & devices popover */
   .account-btn { border-radius: 50% !important; font-weight: 700; font-size: 12.5px; }
@@ -1289,6 +1370,11 @@
     <button class="icon-btn" id="panel-toggle" aria-label="工作面板" title="工作面板">▤</button>
     <button class="icon-btn account-btn" id="account-btn" aria-label="账户与设备" title="账户与设备">D</button>
     <button class="icon-btn" id="settings-btn" aria-label="设置" title="设置">⚙</button>
+    <div class="winbtns" id="winbtns">
+      <button type="button" data-win="min" aria-label="最小化" title="最小化">&#8211;</button>
+      <button type="button" data-win="max" aria-label="最大化" title="最大化">&#9633;</button>
+      <button type="button" data-win="close" class="win-close" aria-label="关闭" title="关闭">&#10005;</button>
+    </div>
   </header>
 
   <div class="account-menu" id="account-menu" hidden>
@@ -1313,6 +1399,7 @@
     <!-- left -->
     <div class="scrim" id="sidebar-scrim" aria-hidden="true"></div>
     <aside class="sidebar" id="sidebar" aria-label="团队">
+      <div class="edge-resizer sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度"></div>
       <div class="drawer-head">
         <span class="drawer-title">Desk</span>
         <button class="icon-btn sm" id="sidebar-close" aria-label="关闭团队列表">✕</button>
@@ -1382,6 +1469,7 @@
     <!-- right -->
     <div class="scrim" id="panel-scrim" aria-hidden="true"></div>
     <aside class="panel" id="panel" aria-label="工作面板">
+      <div class="edge-resizer panel-resizer" id="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整面板宽度"></div>
       <div class="grip" id="panel-grip" aria-hidden="true"><span></span></div>
       <div class="tabs" role="tablist" aria-label="面板页签">
         <button class="tab active" data-tab="activity" role="tab" aria-selected="true">Activity</button>
@@ -1413,7 +1501,10 @@
           <div class="pc-stats" id="pc-stats"></div>
           <div class="section-head" style="margin-top:14px">
             <span>桌面</span>
-            <button class="btn tiny" id="pc-desktop" type="button">接管桌面</button>
+            <span style="display:flex;gap:6px">
+              <button class="btn tiny" id="pc-max" type="button">全屏</button>
+              <button class="btn tiny" id="pc-desktop" type="button">接管桌面</button>
+            </span>
           </div>
           <div class="pc-vnc" id="pc-vnc-wrap">
             <div class="pc-screen-note">点「接管桌面」在这台机器上开一个窗口：能看屏幕、能点、能打字。</div>
@@ -4669,7 +4760,92 @@ function fillAccountMenu() {
 
 /* Take over the hub's desktop: noVNC runs on the hub (hub/vnc-setup.sh) and we
    simply embed it. Same-origin policies do not apply to a plain iframe. */
-function openDesktopViewer() {
+/* ---------------------------------------------------------------------
+   resizable chrome: sidebar (left) and work panel (right).
+   Each divider drags its own CSS variable; widths survive a reload.
+   --------------------------------------------------------------------- */
+const RESIZE_KEYS = { '--side-w': 'desk.sideW', '--panel-w': 'desk.panelW' };
+
+function applyWidth(cssVar, px, { min, max }) {
+  const limit = Math.max(min, Math.min(px, typeof max === 'function' ? max() : max));
+  document.documentElement.style.setProperty(cssVar, `${Math.round(limit)}px`);
+  return limit;
+}
+
+function readWidth(cssVar) {
+  return parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+}
+
+function wireEdgeResizer(handleId, cssVar, { min, max, fromRight }) {
+  const handle = $(handleId);
+  if (!handle) return;
+  const key = RESIZE_KEYS[cssVar];
+  try {
+    const saved = Number(localStorage.getItem(key));
+    if (Number.isFinite(saved) && saved > 120) applyWidth(cssVar, saved, { min, max });
+  } catch { /* private mode */ }
+
+  let dragging = false;
+  handle.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    document.body.classList.add('resizing');
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  window.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const px = fromRight ? window.innerWidth - event.clientX : event.clientX;
+    applyWidth(cssVar, px, { min, max });
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing');
+    const current = readWidth(cssVar);
+    if (Number.isFinite(current)) {
+      try { localStorage.setItem(key, String(current)); } catch { /* ignore */ }
+    }
+  };
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+  handle.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty(cssVar);
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  });
+}
+
+function wireChromeResizers() {
+  wireEdgeResizer('sidebar-resizer', '--side-w', {
+    min: 200, max: () => Math.min(520, window.innerWidth * 0.45), fromRight: false,
+  });
+  wireEdgeResizer('panel-resizer', '--panel-w', {
+    min: 240, max: () => Math.max(360, window.innerWidth * 0.75), fromRight: true,
+  });
+}
+
+/** Fill the whole window with the work panel (the desktop viewer case). */
+function togglePanelMax(on) {
+  const next = on === undefined ? !document.body.classList.contains('panel-max') : on;
+  document.body.classList.toggle('panel-max', next);
+  if (next) {
+    state.panelOpen = true;
+    applyLayoutPrefs();
+    switchTab('computer');
+    // Always (re)build the viewer: an iframe created while the panel was tiny
+    // keeps a sized buffer and would look stretched afterwards.
+    if (state.computer?.desktop?.url || location.hostname) openDesktopViewer();
+    $('pc-max').textContent = '退出全屏';
+  } else {
+    $('pc-max').textContent = '全屏';
+  }
+}
+
+async function openDesktopViewer() {
+  // The URL carries the VNC password, so make sure /api/computer has answered
+  // before building the iframe (otherwise noVNC asks for it again).
+  if (!state.computer?.desktop?.url) {
+    try { await loadComputer(); } catch { /* fall back to the bare URL below */ }
+  }
   const wrap = $('pc-vnc-wrap');
   const url = state.computer?.desktop?.url
     || `http://${location.hostname}:6080/vnc.html?autoconnect=1&resize=scale`;
@@ -4681,6 +4857,13 @@ function openDesktopViewer() {
   frame.setAttribute('allow', 'clipboard-read; clipboard-write');
   frame.referrerPolicy = 'no-referrer';
   box.appendChild(frame);
+  if (document.body.classList.contains('panel-max')) {
+    const exit = el('button', 'pc-exit');
+    exit.type = 'button';
+    exit.textContent = '退出全屏 (Esc)';
+    exit.addEventListener('click', () => togglePanelMax(false));
+    box.appendChild(exit);
+  }
   const row = el('div', 'row-note');
   row.innerHTML = `如果没有画面：确认 Hub 上跑着 <code>desk-vnc</code>（${escapeHtml(url.split('/vnc.html')[0])}），
     并且它的密码是你在 Hub 上设置的那个。`;
@@ -4840,6 +5023,17 @@ function setupViewport() {
 function wireChrome() {
   $('auth-url').value = location.origin;
 
+  // Inside the desktop shell there is no OS title bar; we draw it.
+  if (window.deskShell) {
+    document.body.classList.add('shell');
+    $('winbtns')?.addEventListener('click', (event) => {
+      const act = event.target.closest('[data-win]')?.dataset.win;
+      if (act === 'min') window.deskShell.minimize();
+      else if (act === 'max') window.deskShell.toggleMaximize();
+      else if (act === 'close') window.deskShell.close();
+    });
+  }
+
   // topbar / drawers
   $('nav-toggle').addEventListener('click', () => {
     if ($('sidebar').classList.contains('open')) closeSidebar();
@@ -4884,6 +5078,14 @@ function wireChrome() {
   $('am-pair').addEventListener('click', () => { $('account-menu').hidden = true; openSettings(); });
   $('pc-refresh').addEventListener('click', () => { loadComputer(); refreshScreen(); });
   $('pc-desktop').addEventListener('click', openDesktopViewer);
+  $('pc-max').addEventListener('click', () => togglePanelMax());
+  wireChromeResizers();
+  // Esc leaves the full-window desktop view.
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.body.classList.contains('panel-max')) {
+      togglePanelMax(false);
+    }
+  });
   $('auto-approve-all').addEventListener('change', (event) => {
     savePolicy({ autoApproveAll: Boolean(event.target.checked) });
   });

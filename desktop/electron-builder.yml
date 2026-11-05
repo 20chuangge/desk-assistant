@@ -1,6 +1,6 @@
 appId: com.desk.assistant
 productName: Desk
-copyright: Copyright © 2026
+copyright: Copyright 漏 2026
 
 directories:
   output: dist
@@ -12,6 +12,7 @@ directories:
 files:
   - main.mjs
   - preload.mjs
+  - shell-preload.cjs
   - connect.html
   - package.json
   - build/icon.png
@@ -55,7 +56,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: Desk
   deleteAppDataOnUninstall: false
-  uninstallDisplayName: Desk (个人助理)
+  uninstallDisplayName: Desk (涓汉鍔╃悊)
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
@@ -75,3 +76,4 @@ linux:
   icon: build/icon.png
   category: Utility
   synopsis: Personal AI assistant with its own computer
+
