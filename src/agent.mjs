@@ -66,11 +66,14 @@ function renderGroupSection(bot, group, groupRole) {
 }
 
 export class AgentRuntime {
-  constructor({ config, registry, model, bots, groups, memory, skills, approvals, bus }) {
+  constructor({ config, registry, model, bots, groups, memory, skills, approvals, bus, getApp }) {
     this.config = config;
     this.registry = registry;
     this.model = model;
     this.bots = bots;
+    // Late-bound product state (settings, UI state). Only the primary bot's
+    // settings/ui tools read it; a runtime without it still runs every turn.
+    this.getApp = typeof getApp === 'function' ? getApp : () => null;
     // Group chats are optional: a runtime without them still runs 1:1 turns, and
     // the group tools answer GROUPS_UNAVAILABLE instead of pretending.
     this.groups = groups || null;
@@ -165,6 +168,9 @@ export class AgentRuntime {
       '- Read the workspace before assuming what is in it.',
       '- Save durable facts with memory_write (scope "shared" for things the whole team should know).',
       '- Save a procedure that worked as a skill with skill_save, so the next run is cheaper.',
+      bot.primary
+        ? '- You can change the whole app: settings_get/settings_update for model and timezone, ui_get/ui_set for theme, timezone mode and the controlled machine, and group_create/group_update/group_delete for team chats. When the human asks for a change, do it; do not tell them to open Settings.'
+        : '',
       '- When the task is done, call task_finish with a one or two sentence summary of what actually changed.',
       '- If you are blocked, say exactly what you need. Do not invent tool output.',
     ]
@@ -325,6 +331,7 @@ export class AgentRuntime {
         skills: this.skills,
         bots: this.bots,
         groups: this.groups,
+        app: this.getApp(),
         group: groupContext ? { ...groupContext, role: groupRole } : null,
         groupTurn: coordinatorTurn,
         emit: (event) => this.bus.emit({ ...baseEvent, ...event }),
@@ -427,7 +434,7 @@ export class AgentRuntime {
           // Roster edits made by a tool are invisible to every other window
           // (and to the sidebar of the very window that ran it), so announce
           // them. The UI re-reads /api/bots instead of guessing the diff.
-          if (/^(bot_create|bot_update|bot_delete|group_create|group_delete)$/.test(call.name)) {
+          if (/^(bot_create|bot_update|bot_delete|group_create|group_update|group_delete)$/.test(call.name)) {
             this.bus.emit({
               type: 'roster.changed',
               scope: call.name.startsWith('group') ? 'groups' : 'bots',

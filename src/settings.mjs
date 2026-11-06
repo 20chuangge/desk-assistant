@@ -53,6 +53,9 @@ export function defaultSettings() {
     provider: PROVIDERS.includes(provider) ? provider : 'mock',
     baseUrl: normalizeBaseUrl(env('ASSIST_BASE_URL', DEFAULT_BASE_URL)) || DEFAULT_BASE_URL,
     model: String(env('ASSIST_MODEL', DEFAULT_MODEL)).trim() || DEFAULT_MODEL,
+    // Empty means "the human has not chosen": the UI falls back to the device
+    // zone. Stored here so routines and the About panel agree with the UI.
+    timezone: String(env('ASSIST_TIMEZONE', '')).trim(),
   };
 }
 
@@ -61,6 +64,7 @@ function mergeSettings(base, patch = {}) {
   if (patch.provider !== undefined && patch.provider !== null) next.provider = String(patch.provider);
   if (patch.baseUrl !== undefined && patch.baseUrl !== null) next.baseUrl = String(patch.baseUrl);
   if (patch.model !== undefined && patch.model !== null) next.model = String(patch.model);
+  if (patch.timezone !== undefined) next.timezone = String(patch.timezone ?? '');
   return next;
 }
 
@@ -86,7 +90,21 @@ export function validateSettings(input) {
   if (!model) throw settingsError(400, 'INVALID_MODEL', 'model is required');
   if (model.length > 160) throw settingsError(400, 'INVALID_MODEL', 'model is limited to 160 characters');
 
-  return { provider, baseUrl, model };
+  // Optional IANA zone. "" is valid ("not set yet"), but a typo must not be
+  // silently swallowed: a wrong zone makes routines fire at the wrong hour.
+  let timezone = String(input?.timezone ?? '').trim();
+  if (timezone) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    } catch {
+      throw settingsError(400, 'INVALID_TIMEZONE', `unknown timezone "${timezone}"`);
+    }
+    if (timezone.length > 64) throw settingsError(400, 'INVALID_TIMEZONE', 'timezone is limited to 64 characters');
+  } else {
+    timezone = '';
+  }
+
+  return { provider, baseUrl, model, timezone };
 }
 
 /** Stored settings merged over env/built-in defaults. A broken file never bricks boot. */
@@ -99,6 +117,7 @@ export async function loadSettings() {
   if (typeof raw.provider === 'string') safePatch.provider = raw.provider;
   if (typeof raw.baseUrl === 'string' && raw.baseUrl.trim()) safePatch.baseUrl = raw.baseUrl;
   if (typeof raw.model === 'string' && raw.model.trim()) safePatch.model = raw.model;
+  if (typeof raw.timezone === 'string') safePatch.timezone = raw.timezone;
 
   try {
     return validateSettings(mergeSettings(defaults, safePatch));
@@ -164,6 +183,7 @@ export function publicModel(settings, apiKey) {
     provider: settings.provider,
     baseUrl: settings.baseUrl,
     model: settings.model,
+    timezone: settings.timezone || '',
     hasKey: hasKey(apiKey),
   };
 }

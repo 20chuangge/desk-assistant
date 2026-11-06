@@ -356,12 +356,71 @@ async function avatarFilesByBot() {
  */
 export const SEED_GRANTS = {
   chief: {
-    version: 2,
-    tools: ['bot_create', 'bot_update', 'bot_delete', 'group_create', 'group_post', 'browser_open'],
+    version: 3,
+    tools: [
+      'bot_create', 'bot_update', 'bot_delete',
+      'group_create', 'group_update', 'group_delete', 'group_list', 'group_post',
+      'settings_get', 'settings_update', 'ui_get', 'ui_set',
+      'shell', 'fs_delete', 'browser_open',
+    ],
+    // The primary bot is the human's single point of contact; it may change
+    // product settings without a second confirmation. HIGH risk still asks,
+    // and the denylist still wins.
+    policy: { autoApproveMedium: true },
   },
   ops: { version: 2, tools: ['group_post', 'browser_open'] },
   researcher: { version: 2, tools: ['group_post', 'browser_open'] },
 };
+
+/**
+ * Built-in bots used to ship with English names and role lines. The UI is
+ * Chinese, so the roster should not mix languages. Only replace text that is
+ * still the old default - anything the human typed themselves is left alone.
+ */
+const BUILTIN_TEXT = {
+  chief: {
+    name: ['Chief', '总管'],
+    role: ['Coordinator. Splits work, hands tasks to the right specialist, and reports back in one place.',
+      '协调者。拆分工作，把任务交给合适的人，并在一处汇总结果。'],
+  },
+  ops: {
+    name: ['Ops', '运维'],
+    role: ['Runs commands, keeps the workspace tidy, and asks before anything irreversible.',
+      '执行命令，保持工作区整洁；任何不可逆的操作都先询问。'],
+  },
+  researcher: {
+    name: ['Researcher', '研究'],
+    role: ['Reads the web and the workspace, then writes the short version. No shell access, by design.',
+      '阅读网页与工作区，然后写出简短版本。按设计不接触 shell。'],
+  },
+};
+
+/** Idempotent language migration for untouched built-in bots. */
+export async function migrateBuiltinNames() {
+  let changed = 0;
+  for (const [id, spec] of Object.entries(BUILTIN_TEXT)) {
+    const file = path.join(P.botsDir, `${id}.json`);
+    let bot;
+    try {
+      bot = JSON.parse(await fsp.readFile(file, 'utf8'));
+    } catch {
+      continue; // deleted by the user: respect that
+    }
+    let touched = false;
+    if (bot.name === spec.name[0]) {
+      bot.name = spec.name[1];
+      touched = true;
+    }
+    if (bot.role === spec.role[0]) {
+      bot.role = spec.role[1];
+      touched = true;
+    }
+    if (!touched) continue;
+    await writeJsonAtomic(file, bot);
+    changed += 1;
+  }
+  return changed;
+}
 
 /** Idempotent, additive migration for the built-in bots. Returns how many changed. */
 export async function migrateSeedGrants() {
@@ -379,6 +438,9 @@ export async function migrateSeedGrants() {
     const before = tools.size;
     for (const tool of spec.tools) tools.add(tool);
     bot.tools = [...tools];
+    if (spec.policy && typeof spec.policy === 'object') {
+      bot.policy = { ...(bot.policy || {}), ...spec.policy };
+    }
     bot.seedGrantsVersion = spec.version;
     await fsp.writeFile(file, `${JSON.stringify(bot, null, 2)}\n`);
     if (tools.size !== before) changed += 1;

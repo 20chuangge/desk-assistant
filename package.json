@@ -26,5 +26,8 @@
     "electron",
     "capacitor"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  }
 }

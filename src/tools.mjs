@@ -1115,6 +1115,221 @@ export function createRegistry(deps) {
     },
   });
 
+  add({
+    name: 'group_list',
+    description: 'List every group chat with its members, coordinator and last update time.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      if (typeof ctx.groups?.listGroups !== 'function') {
+        throw toolError('GROUPS_UNAVAILABLE', 'this runtime has no group store');
+      }
+      const list = await ctx.groups.listGroups();
+      const bots = await ctx.bots.listBots();
+      const nameOf = (id) => bots.find((b) => b.id === id)?.name || id;
+      return {
+        count: list.length,
+        groups: list.map((g) => ({
+          id: g.id,
+          name: g.name,
+          members: g.members.map(nameOf),
+          coordinator: nameOf(g.coordinatorId),
+          updatedAt: g.updatedAt,
+        })),
+      };
+    },
+  });
+
+  add({
+    name: 'group_update',
+    description:
+      'Rename a group, replace its member list, or choose a new coordinator. Pass only what should change. Members are bot ids or display names.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: 'Group id.' },
+        name: { type: 'string', description: 'New group name.' },
+        members: { type: 'array', items: { type: 'string' }, description: 'New member list (2-6).' },
+        coordinator: { type: 'string', description: 'Bot id or name that runs group turns.' },
+      },
+      required: ['group'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.groups?.updateGroup !== 'function') {
+        throw toolError('GROUPS_UNAVAILABLE', 'this runtime has no group store');
+      }
+      const groupId = String(args?.group ?? '').trim();
+      const current = await ctx.groups.getGroup(groupId);
+      if (!current) throw toolError('GROUP_NOT_FOUND', `no group with id "${groupId}"`);
+
+      const bots = await ctx.bots.listBots();
+      const resolve = (ref) => {
+        const key = String(ref ?? '').trim().toLowerCase();
+        if (!key) return null;
+        return bots.find((b) => b.id.toLowerCase() === key || b.name.toLowerCase() === key) || null;
+      };
+
+      const patch = {};
+      if (args?.name !== undefined) patch.name = args.name;
+      if (args?.members !== undefined) {
+        const rawMembers = Array.isArray(args.members) ? args.members : [];
+        if (typeof ctx.groups.assertMemberCount === 'function' && typeof ctx.groups.normalizeMemberIds === 'function') {
+          ctx.groups.assertMemberCount(ctx.groups.normalizeMemberIds(rawMembers));
+        }
+        const members = [];
+        const unknown = [];
+        for (const ref of rawMembers) {
+          const bot = resolve(ref);
+          if (!bot) unknown.push(String(ref));
+          else if (!members.includes(bot.id)) members.push(bot.id);
+        }
+        if (unknown.length) throw toolError('GROUP_UNKNOWN_MEMBER', `no bot matches: ${unknown.join(', ')}`);
+        patch.members = members;
+      }
+      if (args?.coordinator !== undefined && String(args.coordinator).trim() !== '') {
+        const bot = resolve(args.coordinator);
+        if (!bot) throw toolError('GROUP_UNKNOWN_MEMBER', `no bot matches "${args.coordinator}"`);
+        patch.coordinatorId = bot.id;
+      }
+      if (!Object.keys(patch).length) throw toolError('GROUP_PATCH_EMPTY', 'pass a new name, members or coordinator');
+
+      const updated = await ctx.groups.updateGroup(current.id, patch);
+      return {
+        updated: true,
+        group: {
+          id: updated.id,
+          name: updated.name,
+          members: updated.members,
+          coordinatorId: updated.coordinatorId,
+        },
+      };
+    },
+  });
+
+  add({
+    name: 'group_delete',
+    description: 'Delete a group chat and its transcript. This cannot be undone. Bot memory is untouched.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: { group: { type: 'string', description: 'Group id.' } },
+      required: ['group'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (typeof ctx.groups?.deleteGroup !== 'function') {
+        throw toolError('GROUPS_UNAVAILABLE', 'this runtime has no group store');
+      }
+      const groupId = String(args?.group ?? '').trim();
+      if (!groupId) throw toolError('GROUP_REQUIRED', 'group id is required');
+      const removed = await ctx.groups.deleteGroup(groupId);
+      return { deleted: true, id: removed.id, name: removed.name };
+    },
+  });
+
+  // --- product settings (primary bot only) --------------------------------
+  // These tools change the same state as the Settings dialog. They are granted
+  // to the primary bot; the approval layer still sees every call.
+
+  add({
+    name: 'settings_get',
+    description: 'Read the app settings: model provider, endpoint, model name, API key presence, and timezone.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      if (!ctx.app?.settingsView) throw toolError('APP_UNAVAILABLE', 'settings are not available in this runtime');
+      return ctx.app.settingsView();
+    },
+  });
+
+  add({
+    name: 'settings_update',
+    description:
+      'Change model settings or the app timezone. Pass only what should change. provider is "mock" or "openai"; baseUrl is the OpenAI-compatible endpoint; apiKey is write-only. timezone is an IANA name such as Asia/Shanghai, or "" to unset.',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', enum: ['mock', 'openai'] },
+        baseUrl: { type: 'string', description: 'OpenAI-compatible base URL, e.g. https://api.deepseek.com/v1' },
+        model: { type: 'string', description: 'Model name, e.g. deepseek-chat' },
+        apiKey: { type: 'string', description: 'API key. Write-only; never echoed back.' },
+        timezone: { type: 'string', description: 'IANA timezone, or "" to unset.' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (!ctx.app?.updateSettings) throw toolError('APP_UNAVAILABLE', 'settings are not available in this runtime');
+      const patch = {};
+      for (const key of ['provider', 'baseUrl', 'model', 'apiKey', 'timezone']) {
+        if (args?.[key] !== undefined) patch[key] = args[key];
+      }
+      if (!Object.keys(patch).length) throw toolError('SETTINGS_EMPTY', 'pass at least one setting');
+      await ctx.app.updateSettings(patch);
+      // A timezone change is also a visible UI change; keep the open window in
+      // step instead of letting the Settings panel disagree with the server.
+      if (patch.timezone !== undefined) {
+        ctx.app.applyUi(patch.timezone
+          ? { timezoneMode: 'manual', timezone: patch.timezone }
+          : { timezoneMode: 'local' });
+      }
+      return ctx.app.settingsView();
+    },
+  });
+
+  add({
+    name: 'ui_get',
+    description:
+      'Read the current UI state the human sees: theme, timezone mode/zone, which machine is selected for remote control, and whether the side panel is open.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      if (!ctx.app?.uiView) throw toolError('APP_UNAVAILABLE', 'UI state is not available in this runtime');
+      return ctx.app.uiView();
+    },
+  });
+
+  add({
+    name: 'ui_set',
+    description:
+      'Change what the human sees, live in every open window. theme is dark/light/system. timezoneMode is local/target/manual; with manual also pass timezone (IANA). target {name, host, port, password?, timezone?} adds or selects a controlled machine. panelOpen/tab control the side panel (activity|computer|skills|routines|memory).',
+    risk: RISK.LOW,
+    parameters: {
+      type: 'object',
+      properties: {
+        theme: { type: 'string', enum: ['dark', 'light', 'system'] },
+        timezoneMode: { type: 'string', enum: ['local', 'target', 'manual'] },
+        timezone: { type: 'string', description: 'IANA zone, used when timezoneMode is manual.' },
+        target: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            host: { type: 'string' },
+            port: { type: 'number' },
+            password: { type: 'string' },
+            timezone: { type: 'string' },
+          },
+          required: ['host'],
+          additionalProperties: false,
+        },
+        panelOpen: { type: 'boolean' },
+        tab: { type: 'string', enum: ['activity', 'computer', 'skills', 'routines', 'memory'] },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (!ctx.app?.applyUi) throw toolError('APP_UNAVAILABLE', 'UI state is not available in this runtime');
+      const patch = {};
+      for (const key of ['theme', 'timezoneMode', 'timezone', 'target', 'panelOpen', 'tab']) {
+        if (args?.[key] !== undefined) patch[key] = args[key];
+      }
+      if (!Object.keys(patch).length) throw toolError('UI_PATCH_EMPTY', 'pass at least one UI setting');
+      return ctx.app.applyUi(patch, { by: ctx.bot?.id });
+    },
+  });
+
   // --- control ------------------------------------------------------------
 
   add({

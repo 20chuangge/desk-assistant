@@ -46,6 +46,7 @@ import {
   AVATAR_MAX_BYTES,
   AVATAR_MIME_TYPES,
   migrateSeedGrants,
+  migrateBuiltinNames,
   writeAssistantConfig,
 } from './bots.mjs';
 import { computerSnapshot, captureScreen } from './computer.mjs';
@@ -57,6 +58,7 @@ import * as memory from './memory.mjs';
 import * as skills from './skills.mjs';
 import * as groups from './groups.mjs';
 import * as settingsModule from './settings.mjs';
+import { createProvisioner, remoteInfo } from './remote.mjs';
 import {
   evaluateAuth,
   isAuthExemptPath,
@@ -93,6 +95,8 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
 
   // New releases add tools; existing installs only get them through this
   // additive migration (config seeds are copy-if-missing).
+  const renamed = await migrateBuiltinNames();
+  if (renamed) console.log(`[assistant] renamed ${renamed} built-in bot(s)`);
   const migrated = await migrateSeedGrants();
   if (migrated) console.log(`[assistant] migrated seed grants for ${migrated} bot(s)`);
 
@@ -123,7 +127,8 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
 
   // Late-bound references: the routine runner needs the runtime, the
   // bot_message tool needs the runtime, and the registry is needed to build it.
-  const refs = { runtime: null, routines: null };
+  const refs = { runtime: null, routines: null, app: null };
+  const provisioner = createProvisioner();
 
   const registry = createRegistry({
     workspaceDir,
@@ -172,6 +177,7 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     skills: skillsApi,
     approvals,
     bus,
+    getApp: () => refs.app,
   });
   refs.runtime = runtime;
 
@@ -211,7 +217,92 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     requireAuth: true,
     pairLimiter: createRateLimiter({ limit: 5, windowMs: 60_000 }),
     recoveredTurns,
+    provisioner,
+    uiState: {
+      theme: null,
+      timezoneMode: null,
+      timezone: '',
+      target: null,
+      panelOpen: false,
+      tab: 'activity',
+      updatedAt: null,
+    },
   };
+
+  // -------------------------------------------------------------------------
+  // product-state callbacks used by the primary bot's settings/ui tools
+  // -------------------------------------------------------------------------
+
+  state.settingsView = () => ({
+    app: { name: state.config.name, version: VERSION },
+    model: settingsModule.publicModel(state.settings, state.apiKey),
+    timezone: state.settings.timezone || '',
+  });
+
+  state.updateSettings = async (patch = {}) => {
+    const source = patch && typeof patch === 'object' ? patch : {};
+    const clean = {};
+    for (const key of ['provider', 'baseUrl', 'model', 'timezone']) {
+      if (source[key] !== undefined) clean[key] = source[key];
+    }
+    const next = await settingsModule.saveSettings(clean);
+    if (typeof source.apiKey === 'string') {
+      state.apiKey = await settingsModule.saveSecret(source.apiKey);
+    }
+    state.settings = next;
+    state.model = settingsModule.createModelFromSettings(state.settings, state.apiKey);
+    state.runtime.setModel(state.model);
+    state.bus.emit({
+      type: 'settings.changed',
+      settings: settingsModule.publicModel(state.settings, state.apiKey),
+    });
+    return state.settingsView();
+  };
+
+  const UI_THEMES = new Set(['dark', 'light', 'system']);
+  const UI_TZ_MODES = new Set(['local', 'target', 'manual']);
+  const UI_TABS = new Set(['activity', 'computer', 'skills', 'routines', 'memory']);
+
+  function cleanUiPatch(patch = {}, { keepSecrets = false } = {}) {
+    const clean = {};
+    if (UI_THEMES.has(patch.theme)) clean.theme = patch.theme;
+    if (UI_TZ_MODES.has(patch.timezoneMode)) clean.timezoneMode = patch.timezoneMode;
+    if (typeof patch.timezone === 'string') clean.timezone = patch.timezone.slice(0, 64);
+    if (typeof patch.panelOpen === 'boolean') clean.panelOpen = patch.panelOpen;
+    if (UI_TABS.has(patch.tab)) clean.tab = patch.tab;
+    if (patch.target && typeof patch.target === 'object') {
+      const target = {};
+      const keys = keepSecrets ? ['id', 'name', 'host', 'port', 'password', 'timezone'] : ['id', 'name', 'host', 'port', 'timezone'];
+      for (const key of keys) {
+        if (patch.target[key] !== undefined) target[key] = patch.target[key];
+      }
+      clean.target = target;
+    }
+    return clean;
+  }
+
+  state.uiView = () => ({ ...state.uiState });
+  state.reportUi = (patch = {}) => {
+    const clean = cleanUiPatch(patch);
+    state.uiState = { ...state.uiState, ...clean, updatedAt: nowIso() };
+    return state.uiView();
+  };
+  state.applyUi = (patch = {}, meta = {}) => {
+    const clean = cleanUiPatch(patch);
+    // A machine password travels to the browser once, in the event, and is
+    // never stored in uiState nor returned by ui_get.
+    const eventPatch = cleanUiPatch(patch, { keepSecrets: true });
+    if (!Object.keys(eventPatch).length) return state.uiView();
+    if (Object.keys(clean).length) {
+      state.uiState = { ...state.uiState, ...clean, updatedAt: nowIso() };
+    }
+    // Global event: every open window applies it, regardless of the chat it is
+    // showing. The UI treats this as a command, not a transcript message.
+    state.bus.emit({ type: 'ui.command', patch: eventPatch, by: meta.by || null });
+    return state.uiView();
+  };
+  refs.app = state;
+
   const server = http.createServer((req, res) => {
     handleRequest(req, res, state).catch((err) => {
       // Last-resort guard: no route may ever produce an unhandled rejection.
@@ -335,7 +426,7 @@ route('GET', /^\/api\/config$/, async (_req, _res, { state }) => {
   return {
     name: state.config.name,
     persona: state.config.persona,
-    timezone: state.config.timezone,
+    timezone: state.settings.timezone || state.config.timezone || '',
     primaryBotId: state.config.primaryBotId || bots.find((b) => b.primary)?.id || null,
     policy: {
       autoApproveMedium: Boolean(state.config.policy?.autoApproveMedium),
@@ -374,6 +465,7 @@ function pairingInfo(state) {
 
 route('GET', /^\/api\/settings$/, async (_req, _res, { state }) => ({
   app: { name: state.config.name, version: VERSION },
+  timezone: state.settings.timezone || '',
   model: settingsModule.publicModel(state.settings, state.apiKey),
   server: {
     host: state.host,
@@ -394,6 +486,7 @@ route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
   if (source.provider !== undefined) patch.provider = source.provider;
   if (source.baseUrl !== undefined) patch.baseUrl = source.baseUrl;
   if (source.model !== undefined) patch.model = source.model;
+  if (source.timezone !== undefined) patch.timezone = source.timezone;
 
   const apiKeyInput = source.apiKey !== undefined ? source.apiKey : body?.apiKey;
   if (apiKeyInput !== undefined && typeof apiKeyInput !== 'string') {
@@ -403,14 +496,9 @@ route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
     throw httpError(400, 'SETTINGS_EMPTY', 'body needs {provider, baseUrl, model, apiKey?}');
   }
 
-  const next = await settingsModule.saveSettings(patch);
+  if (typeof apiKeyInput === 'string') patch.apiKey = apiKeyInput;
   // Write-only secret: it never comes back out of this endpoint.
-  if (typeof apiKeyInput === 'string') {
-    state.apiKey = await settingsModule.saveSecret(apiKeyInput);
-  }
-  state.settings = next;
-  state.model = settingsModule.createModelFromSettings(state.settings, state.apiKey);
-  state.runtime.setModel(state.model);
+  await state.updateSettings(patch);
 
   return { ok: true, model: settingsModule.publicModel(state.settings, state.apiKey) };
 });
@@ -462,6 +550,40 @@ route('POST', /^\/api\/pair$/, async (req, res, { body, state }) => {
 });
 
 route('GET', /^\/api\/pairing$/, async (_req, _res, { state }) => pairingInfo(state));
+
+// --- UI state / remote machines -------------------------------------------
+//
+// The browser owns localStorage (theme, timezone mode, machine list). It pushes
+// a small projection here so the primary bot can read what the human sees and
+// change it over chat. The bot does not store machine passwords here; the
+// `ui.command` event carries them to the open window and nowhere else.
+
+route('GET', /^\/api\/ui\/state$/, async (_req, _res, { state }) => state.uiView());
+
+route('POST', /^\/api\/ui\/state$/, async (_req, _res, { body, state }) => ({
+  ok: true,
+  ui: state.reportUi(body?.patch || body || {}),
+}));
+
+route('GET', /^\/api\/remote\/info$/, async (_req, _res, { query }) => remoteInfo({
+  host: query.get('host'),
+  port: Number(query.get('port')) || 6080,
+}));
+
+route('GET', /^\/api\/remote\/provision$/, async (_req, _res, { state }) => ({
+  jobs: state.provisioner.list(),
+}));
+
+route('POST', /^\/api\/remote\/provision$/, async (_req, _res, { body, state }) => ({
+  ok: true,
+  job: state.provisioner.start(body || {}),
+}));
+
+route('GET', /^\/api\/remote\/provision\/(?<id>[^/]+)$/, async (_req, _res, { params, state }) => {
+  const job = state.provisioner.get(params.id);
+  if (!job) throw httpError(404, 'PROVISION_NOT_FOUND', `no provisioning job "${params.id}"`);
+  return job;
+});
 
 // --- bots ------------------------------------------------------------------
 
@@ -1148,7 +1270,7 @@ route('GET', /^\/api\/stream$/, async (req, res, { query, state }) => {
   let closed = false;
   // Roster edits are global: every window needs them regardless of which bot
   // or group it happens to be looking at.
-  const GLOBAL_EVENTS = new Set(['roster.changed']);
+  const GLOBAL_EVENTS = new Set(['roster.changed', 'ui.command', 'settings.changed']);
   const send = (event) => {
     if (closed) return;
     if (!GLOBAL_EVENTS.has(event.type)) {

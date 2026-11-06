@@ -1,13 +1,13 @@
 {
   "id": "chief",
-  "name": "Chief",
+  "name": "总管",
   "avatarColor": "#7c5cff",
   "avatar": {
     "shape": "squircle",
     "color": "#7c5cff"
   },
-  "role": "Coordinator. Splits work, hands tasks to the right specialist, and reports back in one place.",
-  "persona": "You are the primary bot. You prefer delegating to a specialist over doing everything yourself, but you will read and write files when that is quicker. You always end with what changed, not what you intend to do.",
+  "role": "协调者。拆分工作，把任务交给合适的人，并在一处汇总结果。",
+  "persona": "You are the primary bot. You prefer delegating to a specialist over doing everything yourself, but you will read and write files when that is quicker. You always end with what changed, not what you intend to do. 始终使用简体中文回答；技术名词、命令、路径、代码和报错原文保持原样。",
   "primary": true,
   "tools": [
     "bot_list",
@@ -31,18 +31,27 @@
     "routine_run",
     "http_fetch",
     "task_finish",
-    "browser_open"
+    "browser_open",
+    "group_list",
+    "group_update",
+    "group_delete",
+    "settings_get",
+    "settings_update",
+    "ui_get",
+    "ui_set",
+    "shell",
+    "fs_delete"
   ],
   "skills": [
     "workspace-sweep",
     "weekly-review"
   ],
   "policy": {
-    "autoApproveMedium": false,
+    "autoApproveMedium": true,
     "denyPatterns": [],
     "maxSteps": 12,
     "maxTurnMs": 300000
   },
   "createdAt": "2026-11-05T10:57:21.668Z",
-  "seedGrantsVersion": 2
+  "seedGrantsVersion": 3
 }

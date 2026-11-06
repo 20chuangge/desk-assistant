@@ -4,16 +4,30 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#08090d" />
-<meta name="color-scheme" content="dark" />
+<meta name="color-scheme" content="dark light" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Desk" />
 <meta name="format-detection" content="telephone=no" />
-<title>Desk - personal assistant</title>
+<title>Desk · 个人助理</title>
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="icon" href="icons/icon-32.png" sizes="32x32" />
+<script>
+  // Apply the saved theme before the first paint so a light-theme user never
+  // sees a dark flash while the module script at the bottom is still loading.
+  (() => {
+    try {
+      const pref = localStorage.getItem('desk.theme') || 'system';
+      const light = pref === 'light'
+        || (pref === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      document.documentElement.dataset.theme = light ? 'light' : 'dark';
+      document.documentElement.dataset.themePref = pref;
+      document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+    } catch { /* private mode: keep the dark default */ }
+  })();
+</script>
 <style>
   /* =====================================================================
      Desk - one file, no framework, no webfonts, no CDN, no build step.
@@ -610,7 +624,7 @@
   body.resizing iframe { pointer-events: none; }
 
   /* "Whole window" mode for the desktop tab (Grok-Bot style): the work panel
-     covers the window and only the viewer remains. */
+     covers the window and only the single desktop card remains. */
   body.panel-max #sidebar,
   body.panel-max .main > .chat,
   body.panel-max .scrim { display: none !important; }
@@ -619,38 +633,32 @@
     position: static; border-left: 0; background: var(--bg);
     width: 100%; height: 100%;
   }
+  body.panel-max #panel .tabs,
+  body.panel-max #pane-computer > .section-head,
+  body.panel-max #pc-stats,
+  body.panel-max #pc-procs { display: none !important; }
   body.panel-max #panel .panel-body {
     display: flex; flex-direction: column; overflow: hidden; padding: 0; min-height: 0;
   }
-  body.panel-max #pane-computer.active { flex: 1; min-height: 0; }
-  body.panel-max #pc-screen-wrap,
-  body.panel-max #pc-stats,
-  body.panel-max #pc-procs,
-  body.panel-max #pane-computer > .section-head:first-of-type { display: none !important; }
-  body.panel-max #pane-computer .section-head { margin: 8px 12px; }
-  body.panel-max #pane-computer .pc-vnc { flex: 1; min-height: 0; margin: 0; }
-  body.panel-max #pane-computer .pc-vnc iframe {
-    width: 100%; height: 100%; min-height: 60vh; aspect-ratio: auto; border-radius: 0; border: 0;
+  body.panel-max #pane-computer.active { flex: 1; min-height: 0; display: block; }
+  /* The card itself goes full-window; a screenshot stays contain-fitted so
+     nothing is cropped, and a live VNC session fills the same surface. */
+  body.panel-max #pc-screen-wrap {
+    position: fixed; inset: 0; z-index: 90; margin: 0; border: 0; border-radius: 0;
+    background: #05070b; display: flex; align-items: center; justify-content: center;
   }
-  /* Belt and braces: in fullscreen the viewer becomes a fixed overlay, so it
-     cannot be squeezed by any parent height calculation. */
+  body.panel-max #pc-screen { width: 100%; height: 100%; object-fit: contain; }
   body.panel-max #pc-vnc-wrap {
-    position: fixed; inset: 0; z-index: 90; margin: 0; background: #05070b;
+    position: absolute; inset: 0; width: auto; height: auto; aspect-ratio: auto;
   }
-  body.panel-max #pc-vnc-wrap .pc-vnc-frame {
-    display: flex; flex-direction: column; height: 100%; gap: 0; padding: 0;
-  }
-  body.panel-max #pc-vnc-wrap iframe {
-    flex: 1; width: 100%; height: 100%; border: 0; border-radius: 0; aspect-ratio: auto;
-  }
-  body.panel-max #pc-vnc-wrap .row-note { display: none; }
+  body.panel-max #pc-exit { display: inline-flex; }
   .pc-exit {
+    display: none;
     position: fixed; right: 16px; bottom: 16px; z-index: 95;
     background: rgba(20, 24, 33, .92); color: var(--text); border: 1px solid var(--border);
     border-radius: 10px; padding: 8px 14px; font-size: 12.5px; cursor: pointer;
   }
   .pc-exit:hover { background: var(--accent); color: #fff; }
-  body.panel-max #pc-max { background: var(--accent); color: #fff; border-color: transparent; }
   .tabs { display: flex; align-items: center; gap: 2px; padding: 10px 10px 0; flex: none; }
   .tab {
     flex: 1; min-height: 36px; padding: 7px 4px; text-align: center;
@@ -700,12 +708,83 @@
   .pc-row span { color: var(--muted); }
   .pc-row b { font-weight: 600; color: var(--text); text-align: right; }
 
-  .pc-vnc { margin-bottom: var(--s2); }
-  .pc-vnc iframe {
-    width: 100%; aspect-ratio: 16 / 10; border: 1px solid var(--border-soft);
-    border-radius: 10px; background: #000;
+  /* The single desktop card: a live screenshot by default, and the same
+     surface becomes a noVNC viewer when the user takes over. */
+  .pc-screen.takeover #pc-screen,
+  .pc-screen.takeover #pc-screen-note,
+  .pc-screen.viewer #pc-screen,
+  .pc-screen.viewer #pc-screen-note { display: none !important; }
+  .pc-vnc-layer {
+    position: relative; width: 100%; aspect-ratio: 16 / 10; background: #000;
   }
-  .pc-vnc-frame { display: grid; gap: 6px; }
+  .pc-vnc-layer iframe {
+    position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block;
+  }
+  .pc-screen.preview .pc-vnc-layer { cursor: default; }
+  .pc-screen.preview .pc-vnc-layer iframe { pointer-events: none; }
+  .pc-vnc-shield {
+    position: absolute; inset: 0; z-index: 4; display: flex;
+    flex-direction: column; align-items: center; justify-content: flex-end; gap: 10px;
+    padding: 0 0 18px; pointer-events: none;
+    background: linear-gradient(180deg, rgba(5,7,11,0) 55%, rgba(5,7,11,0.55) 100%);
+  }
+  .pc-vnc-shield[hidden] { display: none; }
+  .pc-preview-badge {
+    position: absolute; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(10, 12, 18, 0.72); backdrop-filter: blur(8px);
+    color: #d8dbe5; font-size: 10.5px; letter-spacing: 0.02em;
+  }
+  .pc-preview-badge i {
+    width: 6px; height: 6px; border-radius: 50%; background: #35d07f;
+    box-shadow: 0 0 0 3px rgba(53, 208, 127, 0.14);
+  }
+  .pc-vnc-shield .btn {
+    position: relative; z-index: 1; pointer-events: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  body.panel-max .pc-vnc-shield { padding-bottom: 54px; }
+  .pc-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+
+  /* author display rules below would otherwise beat the UA [hidden] style */
+  #pane-computer [hidden] { display: none !important; }
+
+  /* pick which machine the takeover button talks to */
+  .pc-target-bar {
+    display: flex; align-items: center; gap: 6px; margin: 0 0 4px;
+  }
+  .pc-target-label {
+    flex: none; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); font-weight: 700;
+  }
+  .pc-target-select { flex: 1; min-width: 0; font-size: 12px; min-height: 32px; padding: 5px 28px 5px 9px; }
+  select.field.pc-target-select { background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px; }
+  .pc-target-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin: 0 0 var(--s3); min-height: 14px;
+  }
+  .pc-target-hint { color: var(--dim); font-size: 11px; }
+  .pc-link {
+    border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer;
+    padding: 0; text-decoration: underline; text-underline-offset: 2px;
+  }
+  .pc-link:hover { color: var(--text); }
+
+  /* remote machines have no screenshot endpoint: show a card instead */
+  .pc-remote {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 30px 18px 26px; text-align: center;
+  }
+  .pc-remote[hidden] { display: none; }
+  .pc-remote-icon {
+    width: 34px; height: 34px; fill: none; stroke: var(--dim); stroke-width: 1.5;
+    stroke-linecap: round; stroke-linejoin: round; margin-bottom: 2px;
+  }
+  .pc-remote-name { font-size: 13px; font-weight: 650; color: var(--text); }
+  .pc-remote-addr { font-size: 11px; color: var(--dim); }
+  .pc-remote-note { max-width: 230px; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+  .pc-remote .btn { margin-top: 4px; }
+  .pc-screen.takeover .pc-remote { display: none !important; }
 
   /* "working…" row */
   .typing-row {
@@ -820,10 +899,10 @@
      toast
      --------------------------------------------------------------------- */
   .toast {
-    position: fixed; left: 50%; bottom: calc(112px + var(--safe-b));
-    transform: translateX(-50%) translateY(14px);
+    position: fixed; left: 50%; top: calc(76px + var(--safe-t));
+    transform: translateX(-50%) translateY(-10px);
     background: var(--panel-3); border: 1px solid var(--border);
-    color: var(--text); padding: 10px 16px; border-radius: 10px;
+    color: var(--text); padding: 9px 15px; border-radius: 999px;
     font-size: 12.5px; opacity: 0; pointer-events: none;
     transition: opacity 160ms var(--ease), transform 160ms var(--ease);
     z-index: 120; max-width: min(92vw, 480px); text-align: center;
@@ -1133,7 +1212,7 @@
   .g-block .chip, .g-block .approval { max-width: 100%; }
 
   /* modal (create group) */
-  #group-scrim { z-index: 96; }
+  #group-scrim, #vnc-scrim, #confirm-scrim { z-index: 96; }
   .modal {
     position: fixed; z-index: 97; left: 50%; top: 50%;
     transform: translate(-50%, -48%) scale(0.98);
@@ -1167,6 +1246,12 @@
     border: 1px solid rgba(240, 167, 44, 0.3); background: rgba(240, 167, 44, 0.08); color: #e6c48b;
   }
   .modal-note[hidden] { display: none; }
+  .modal-note.ok { border-color: rgba(34, 197, 94, 0.32); background: rgba(34, 197, 94, 0.09); color: #9ee6b5; }
+  .modal-note.bad { border-color: rgba(239, 68, 68, 0.34); background: rgba(239, 68, 68, 0.09); color: #f3a6a6; }
+  .modal-sep { height: 1px; background: var(--border-soft); margin: 6px 0 2px; }
+  .modal-section-title { font-size: 12.5px; font-weight: 650; color: var(--text); }
+  .modal.modal-sm { width: min(380px, calc(100vw - 32px)); }
+  .confirm-text { font-size: 13px; color: var(--muted); line-height: 1.65; white-space: pre-wrap; }
   .member-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
   .member-grid > * { min-width: 0; }
   .member-card {
@@ -1346,6 +1431,768 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
   }
+
+  /* =====================================================================
+     v2 chrome: the sidebar is a positioned flex column so its divider can be
+     dragged, its content scrolls on its own, and the account/settings block
+     is pinned to the bottom-left corner.
+     ===================================================================== */
+  .sidebar {
+    position: relative;
+    overflow: hidden;
+  }
+  @media (max-width: 860px) {
+    .sidebar { position: fixed; }
+  }
+  .sidebar-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .sidebar-resizer { right: 0; width: 8px; }
+  .sidebar-resizer::after { right: 0; }
+  .panel-resizer::after { left: 0; }
+  .edge-resizer::after { background: var(--border); }
+  .edge-resizer::before {
+    content: ''; position: absolute; top: 50%; width: 4px; height: 42px;
+    margin-top: -21px; border-radius: 99px;
+    background: var(--border-strong); opacity: 0;
+    transition: opacity 120ms var(--ease), background 120ms var(--ease);
+  }
+  .sidebar-resizer::before { right: 2px; }
+  .panel-resizer::before { left: 2px; }
+  .edge-resizer:hover::before, body.resizing .edge-resizer::before { opacity: 1; background: var(--accent); }
+  .edge-resizer:hover::after, body.resizing .edge-resizer::after { background: var(--accent); }
+
+  .sidebar-bottom {
+    flex: none;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 10px calc(10px + var(--safe-b));
+    border-top: 1px solid var(--border-soft);
+    background: var(--bg-2);
+  }
+  .side-account {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; min-width: 0; padding: 7px 8px;
+    border: 1px solid transparent; border-radius: 11px;
+    text-align: left; transition: background 120ms var(--ease), border-color 120ms var(--ease);
+  }
+  .side-account:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-soft); }
+  .side-account .am-avatar { width: 34px; height: 34px; flex: none; }
+  .side-account-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+  .side-account-text b { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-account-text small { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+  .side-account-more { flex: none; color: var(--dim); font-size: 16px; line-height: 1; }
+  .side-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .side-meta .pill { min-width: 0; max-width: 100%; font-size: 11px; padding: 4px 8px; }
+  .side-meta #model-pill { flex: 0 1 auto; }
+  .side-meta .tz { flex: none; }
+  .side-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .side-action {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 0; min-height: 34px; padding: 5px 8px;
+    border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font-size: 12px; font-weight: 500;
+    transition: color 120ms var(--ease), border-color 120ms var(--ease), background 120ms var(--ease);
+  }
+  .side-action:hover { color: var(--text); border-color: var(--border-strong); background: rgba(255, 255, 255, 0.05); }
+  .side-action span:first-child { font-size: 13px; }
+
+  /* the account popover now lives above the bottom-left card */
+  .account-menu {
+    top: auto; right: auto;
+    left: 12px; bottom: calc(166px + var(--safe-b));
+    width: min(292px, calc(var(--side-w, 280px) - 24px));
+    min-width: 232px;
+    /* above the mobile sidebar (60), below the settings drawer (90) */
+    z-index: 80;
+  }
+
+  /* theme picker in settings */
+  .seg {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
+    padding: 4px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel);
+  }
+  .seg-btn {
+    min-width: 0; min-height: 34px; padding: 6px 4px; border-radius: 7px;
+    color: var(--muted); font-size: 12px; font-weight: 600;
+    transition: background 120ms var(--ease), color 120ms var(--ease);
+  }
+  .seg-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+  .seg-btn.active { background: var(--accent); color: #fff; }
+  .seg-btn.active:hover { background: var(--accent-2); }
+
+  @media (max-width: 860px) {
+    .edge-resizer { display: none; }
+    .sidebar { padding-bottom: 0; }
+    .account-menu { left: 12px; bottom: calc(166px + var(--safe-b)); width: min(292px, calc(100vw - 24px)); min-width: 0; }
+  }
+
+  /* =====================================================================
+     light theme - the same components, a daylight surface. The accent and
+     the meaning colours (green/amber/red) stay recognisable.
+     ===================================================================== */
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f4f5f9;
+    --bg-2: #eceef5;
+    --panel: #ffffff;
+    --panel-2: #f6f7fb;
+    --panel-3: #e9ecf3;
+    --border: #dde1ea;
+    --border-soft: #e8ebf2;
+    --border-strong: #c7cdda;
+    --text: #161a23;
+    --muted: #5b6376;
+    --dim: #8b93a5;
+    --accent: #6a4cff;
+    --accent-2: #5a3df0;
+    --accent-soft: rgba(106, 76, 255, 0.10);
+    --green: #149a57;
+    --amber: #b26a00;
+    --red: #d13232;
+    --cyan: #0b7aa8;
+    --shadow-1: 0 8px 24px rgba(20, 28, 50, 0.10);
+    --shadow-2: 0 18px 48px rgba(20, 28, 50, 0.18);
+  }
+  html[data-theme="light"] body {
+    background: radial-gradient(1200px 600px at 20% -10%, #e9e3ff 0%, var(--bg) 55%) fixed;
+  }
+  html[data-theme="light"] ::selection { background: rgba(106, 76, 255, 0.22); }
+  html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c9cfdd; background-clip: content-box; }
+  html[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #b4bccd; background-clip: content-box; }
+  html[data-theme="light"] .topbar { background: rgba(250, 251, 254, 0.88); }
+  html[data-theme="light"] .sidebar { background: rgba(248, 249, 253, 0.72); }
+  html[data-theme="light"] .panel { background: rgba(248, 249, 253, 0.66); }
+  html[data-theme="light"] .mobilenav { background: rgba(250, 251, 254, 0.94); }
+  html[data-theme="light"] .composer { background: linear-gradient(180deg, transparent, rgba(244, 245, 249, 0.78)); }
+  html[data-theme="light"] .icon-btn:hover,
+  html[data-theme="light"] .bot:hover,
+  html[data-theme="light"] .group:hover,
+  html[data-theme="light"] .chip summary:hover,
+  html[data-theme="light"] .menu button:hover,
+  html[data-theme="light"] .bot-more:hover,
+  html[data-theme="light"] .tab:hover,
+  html[data-theme="light"] .navitem:active,
+  html[data-theme="light"] .winbtns button:hover { background: rgba(20, 28, 50, 0.06); }
+  html[data-theme="light"] .side-account:hover,
+  html[data-theme="light"] .side-action:hover,
+  html[data-theme="light"] .seg-btn:hover { background: rgba(20, 28, 50, 0.05); }
+  html[data-theme="light"] .am-row { border-bottom-color: var(--border-soft); }
+  html[data-theme="light"] .bubble.md .md-code { background: #f2f4f9; }
+  html[data-theme="light"] .bubble.md .md-table th { background: rgba(20, 28, 50, 0.04); }
+  html[data-theme="light"] .bubble.system { color: #7a4c00; }
+  html[data-theme="light"] .row.user .bubble {
+    background: linear-gradient(180deg, rgba(106, 76, 255, 0.15), rgba(106, 76, 255, 0.08));
+    border-color: rgba(106, 76, 255, 0.28);
+  }
+  html[data-theme="light"] .risk.LOW { color: #0c7a45; }
+  html[data-theme="light"] .risk.MEDIUM { color: #945c00; }
+  html[data-theme="light"] .risk.HIGH { color: #b3261e; }
+  html[data-theme="light"] .approval-args { background: rgba(20, 28, 50, 0.04); }
+  html[data-theme="light"] .approval-wait { color: #8a5600; }
+  html[data-theme="light"] .btn.danger { color: #b3261e; }
+  html[data-theme="light"] .btn.danger:hover { background: rgba(209, 50, 50, 0.08); }
+  html[data-theme="light"] .notice,
+  html[data-theme="light"] .notice-inline,
+  html[data-theme="light"] .modal-note,
+  html[data-theme="light"] .avatar-note { color: #7a4c00; }
+  html[data-theme="light"] .set-status.ok { color: #0c7a45; }
+  html[data-theme="light"] .set-status.bad { color: #b3261e; }
+  html[data-theme="light"] .tag.good { color: #0c7a45; }
+  html[data-theme="light"] .tag.bad { color: #b3261e; }
+  html[data-theme="light"] .tag.warn { color: #8a5600; }
+  html[data-theme="light"] .menu button.danger { color: #b3261e; }
+  html[data-theme="light"] .pill.warn { color: #8a5600; }
+  html[data-theme="light"] .pc-screen { background: #e9ecf3; }
+  html[data-theme="light"] .grip span { background: #c2c8d6; }
+  html[data-theme="light"] .swatch { box-shadow: 0 0 0 1px rgba(20, 28, 50, 0.16) inset; }
+  html[data-theme="light"] .swatch.active { border-color: #161a23; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7) inset; }
+  html[data-theme="light"] .scrim { background: rgba(20, 28, 50, 0.35); }
+  html[data-theme="light"] .auth {
+    background: radial-gradient(900px 520px at 50% -20%, #e2dcff 0%, var(--bg) 62%);
+  }
+  html[data-theme="light"] .auth-card { background: rgba(255, 255, 255, 0.92); }
+  html[data-theme="light"] .auth-msg { color: #b3261e; }
+  html[data-theme="light"] .auth-msg.ok { color: #0c7a45; }
+  html[data-theme="light"] .theme-glyph { color: inherit; }
+
+  /* =====================================================================
+     v3 · Grok-style shell
+     One neutral scale, no decorative gradients. Colour only where it means
+     something (a warning, a failure, an avatar). Conversation first.
+     ===================================================================== */
+  :root {
+    --bg: #0b0b0c;
+    --bg-2: #111112;
+    --panel: #151516;
+    --panel-2: #1c1c1e;
+    --panel-3: #262628;
+    --border: #2a2a2d;
+    --border-soft: #202023;
+    --border-strong: #3d3d42;
+    --text: #f2f2f3;
+    --muted: #a3a3aa;
+    --dim: #6d6d74;
+    --accent: #f2f2f3;
+    --accent-2: #d8d8dc;
+    --accent-soft: rgba(255, 255, 255, 0.08);
+    --green: #4cc38a;
+    --amber: #d9a85c;
+    --red: #e06c75;
+    --cyan: #56b6c2;
+    --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.35);
+    --shadow-2: 0 24px 64px rgba(0, 0, 0, 0.55);
+    --side-w: 272px;
+  }
+
+  body {
+    background: var(--bg);
+    font-size: 14px;
+  }
+  ::selection { background: rgba(255, 255, 255, 0.18); }
+  :focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+  a { color: var(--text); text-decoration-color: var(--dim); }
+  html[data-theme="light"] ::selection { background: rgba(0, 0, 0, 0.12); }
+
+  /* frameless shell ---------------------------------------------------- */
+  .drag-strip { display: none; }
+  body.shell .drag-strip {
+    display: block; position: fixed; top: 0; left: 0; right: 0; height: 30px;
+    z-index: 65; -webkit-app-region: drag; user-select: none;
+  }
+  body.shell .winbtns {
+    display: flex; position: fixed; top: 0; right: 8px; z-index: 70;
+    height: 30px; align-items: center; -webkit-app-region: no-drag;
+  }
+  body.shell .main { padding-top: 30px; }
+  body.shell .winbtns button { width: 34px; height: 24px; border-radius: 6px; cursor: pointer; }
+
+  /* sidebar ------------------------------------------------------------ */
+  .main { grid-template-columns: var(--side-w, 272px) minmax(0, 1fr) var(--panel-w, 340px); }
+  body.panel-hidden .main { grid-template-columns: var(--side-w, 272px) minmax(0, 1fr); }
+  .sidebar {
+    background: var(--bg-2);
+    border-right: 1px solid var(--border-soft);
+  }
+  .side-top {
+    display: flex; align-items: center; gap: 6px;
+    padding: 14px 10px 8px 14px; flex: none;
+  }
+  .side-brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .brand-mark {
+    width: 24px; height: 24px; border-radius: 7px;
+    background: linear-gradient(145deg, #ffffff, #9d9da6);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  }
+  .side-brand-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .side-brand-text b { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .side-brand-text small { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .new-bot { position: relative; padding: 0; flex: none; }
+  .round-btn {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    border: 1px solid var(--border); color: var(--muted); background: transparent;
+    transition: background 120ms var(--ease), color 120ms var(--ease), border-color 120ms var(--ease);
+  }
+  .round-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); }
+  .round-btn[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
+  #new-menu {
+    left: auto; right: 0; top: calc(100% + 8px); bottom: auto;
+    min-width: 168px; padding: 5px; border-radius: 12px; background: var(--panel-2);
+  }
+  .side-close { display: none; }
+
+  .bot-form {
+    margin: 2px 10px 10px; padding: 12px; gap: 8px;
+    border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
+  }
+  .bot-form-head { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+
+  .sidebar-scroll { padding: 4px 8px 12px; }
+  .side-section { padding: 0 0 14px; }
+  .side-head {
+    padding: 10px 8px 6px;
+    font-size: 11px; letter-spacing: 0.02em; text-transform: none;
+    color: var(--dim); font-weight: 500;
+  }
+  .side-head .count { color: var(--dim); font-weight: 400; font-size: 11px; }
+  .side-head .mono { color: var(--dim); }
+  .side-hint { padding: 2px 8px 6px; font-size: 11.5px; line-height: 1.55; }
+
+  .bot-list, .group-list { gap: 1px; padding: 0; }
+  .bot, .group {
+    gap: 10px; padding: 6px 8px; border-radius: 9px; min-height: 46px;
+    border: 1px solid transparent;
+  }
+  .bot:hover, .group:hover { background: rgba(255, 255, 255, 0.045); }
+  .bot.active, .group.active { background: var(--panel-2); border-color: transparent; }
+  .bot-name { font-size: 13px; font-weight: 500; gap: 6px; }
+  .bot-preview { font-size: 11.5px; color: var(--dim); margin-top: 1px; }
+  .group .bot-name, .bot .bot-name { line-height: 1.3; }
+  .badge {
+    font-size: 9px; padding: 0 5px; border-radius: 4px; letter-spacing: 0.04em;
+    background: transparent; color: var(--dim); border: 1px solid var(--border);
+    font-weight: 600;
+  }
+  .stack-cell, .group .stack-cell { background: var(--bg-2); }
+  .group .stack-cell .av { --av-size: 24px; }
+
+  .sidebar-bottom {
+    gap: 6px; padding: 8px 8px calc(10px + var(--safe-b));
+    background: var(--bg-2); border-top: 1px solid var(--border-soft);
+  }
+  .side-account { padding: 6px 7px; gap: 9px; border-radius: 9px; }
+  .side-account:hover { background: var(--panel-2); border-color: transparent; }
+  .side-account .am-avatar { width: 28px; height: 28px; font-size: 11.5px; }
+  .side-account-text b { font-size: 12.5px; font-weight: 500; }
+  .side-account-text small { font-size: 10.5px; }
+  .am-avatar {
+    background: var(--panel-3); color: var(--text);
+    border: 1px solid var(--border); font-weight: 600;
+  }
+  .side-account-more { font-size: 15px; }
+  .side-meta { padding: 0 7px; }
+  .side-meta .pill { border: 0; background: transparent; padding: 0; font-size: 10.5px; color: var(--dim); gap: 5px; }
+  .side-meta #model-pill #model-label { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .side-actions { display: flex; gap: 2px; }
+  .side-action {
+    flex: 1; min-height: 30px; padding: 4px 8px; gap: 6px;
+    border: 0; border-radius: 8px; background: transparent;
+    justify-content: flex-start; font-size: 11.5px; font-weight: 400; color: var(--dim);
+  }
+  .side-action:hover { background: var(--panel-2); border-color: transparent; color: var(--text); }
+  .side-action svg { opacity: 0.8; }
+  .edge-resizer::after { background: transparent; }
+  .edge-resizer:hover::after, body.resizing .edge-resizer::after { background: var(--border-strong); }
+  .edge-resizer::before { background: var(--border-strong); }
+  .edge-resizer:hover::before, body.resizing .edge-resizer::before { background: var(--muted); }
+
+  /* chat header -------------------------------------------------------- */
+  .chat { background: var(--bg); }
+  .chat-head {
+    gap: 10px; padding: 10px 20px; min-height: 56px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .chat-title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .chat-title-text { min-width: 0; }
+  .chat-head .title { font-size: 14px; font-weight: 600; line-height: 1.25; }
+  .chat-head .sub { font-size: 11.5px; color: var(--dim); max-width: 46vw; line-height: 1.3; margin-top: 1px; }
+  .chat-head-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  .chat-head .icon-btn { width: 32px; height: 32px; border-radius: 8px; }
+  .pill.soft { border-color: transparent; background: var(--panel-2); color: var(--dim); font-size: 11px; padding: 3px 9px; }
+  .pill.warn {
+    border-color: rgba(217, 168, 92, 0.32); background: rgba(217, 168, 92, 0.10);
+    color: #e3c38b; font-size: 11px; padding: 3px 9px;
+  }
+  .chat-avatar { filter: none; }
+
+  /* conversation ------------------------------------------------------- */
+  .messages {
+    padding: 26px 24px 10px; gap: 18px;
+    scroll-behavior: smooth;
+  }
+  .messages > .row,
+  .messages > .chip,
+  .messages > .approval,
+  .messages > .status-line,
+  .messages > .typing-row {
+    width: 100%; max-width: 760px; margin-left: auto; margin-right: auto;
+  }
+  .messages > .empty { margin: auto; }
+  .day-sep { color: var(--dim); font-size: 11px; font-weight: 400; margin: 2px 0; }
+  .row { gap: 0; }
+  .row.user { justify-content: flex-end; }
+
+  .bubble { max-width: 100%; }
+  .row.user .bubble {
+    background: var(--panel-2); border-color: transparent; color: var(--text);
+    border-radius: 18px; padding: 9px 14px;
+    max-width: min(560px, 82%); font-size: 14px; line-height: 1.55;
+  }
+  .row.assistant .bubble {
+    background: var(--panel); border-color: var(--border-soft);
+    border-radius: 16px; border-bottom-left-radius: 6px;
+    padding: 10px 14px; max-width: min(680px, 92%);
+    font-size: 14px; line-height: 1.65;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+  }
+  .bubble.system { background: transparent; border-color: transparent; color: var(--dim); font-size: 12.5px; padding: 0 1px; }
+  .row.assistant .bubble.system {
+    background: transparent; border-color: transparent; padding: 0 1px;
+    color: var(--dim); box-shadow: none;
+  }
+  .bubble.md .md-code { background: var(--bg-2); border-radius: 10px; }
+  .bubble.md code { background: var(--accent-soft); }
+  .bubble.md a { color: var(--text); text-decoration: underline; text-decoration-color: var(--dim); }
+  .streaming::after { background: var(--muted); }
+
+  .status-line { color: var(--dim); font-size: 11.5px; }
+  .typing-row { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12.5px; }
+  .typing-dots { display: inline-flex; gap: 3px; }
+  .typing-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--muted); animation: pulse 1.2s infinite; }
+  .typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+  .typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+  /* empty state / choice cards ---------------------------------------- */
+  .empty {
+    max-width: 560px; text-align: left; padding: 16px 4px 24px;
+  }
+  .empty-mark {
+    width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--text); color: var(--bg); font-weight: 700; font-size: 15px;
+    margin-bottom: 16px;
+  }
+  .empty h2 { font-size: 21px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .empty p { color: var(--muted); font-size: 13px; line-height: 1.65; margin: 0 0 20px; }
+  .empty-foot { color: var(--dim); font-size: 11.5px; margin-top: 16px; }
+  .choice-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .choice {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 11px 12px; text-align: left;
+    border: 1px solid var(--border); border-radius: 13px; background: var(--bg-2);
+    transition: background 120ms var(--ease), border-color 120ms var(--ease), transform 80ms var(--ease);
+  }
+  .choice:hover { background: var(--panel-2); border-color: var(--border-strong); }
+  .choice:active { transform: scale(0.995); }
+  .choice:disabled { opacity: 0.5; cursor: default; }
+  .choice-key {
+    width: 24px; height: 24px; flex: none; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--panel);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+  .choice-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .choice-title { font-size: 13px; font-weight: 500; color: var(--text); }
+  .choice-desc { font-size: 11.5px; color: var(--dim); line-height: 1.45; }
+  .choice-go { color: var(--dim); font-size: 16px; margin-left: 4px; flex: none; }
+
+  /* tool chips --------------------------------------------------------- */
+  .chip {
+    max-width: 760px; border: 1px solid var(--border-soft); border-radius: 12px;
+    background: var(--bg-2); font-family: var(--sans); font-size: 12px;
+  }
+  .chip summary { min-height: 36px; padding: 7px 12px; gap: 8px; flex-wrap: nowrap; color: var(--muted); }
+  .chip summary:hover { background: rgba(255, 255, 255, 0.025); }
+  .chip-icon { width: 13px; font-size: 11px; }
+  .chip-icon.pending { color: var(--muted); }
+  .chip-icon.ok { color: var(--green); }
+  .chip-icon.fail { color: var(--red); }
+  .chip-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+  .chip-name { font-weight: 500; font-size: 12.5px; color: var(--text); white-space: nowrap; }
+  .chip-detail {
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  .chip-state { font-size: 10.5px; color: var(--dim); flex: none; }
+  .chip-state.warn { color: var(--amber); }
+  .chip-state.bad { color: var(--red); }
+  .chip-more { font-size: 11px; color: var(--dim); flex: none; margin-left: 2px; }
+  .chip .body { padding: 10px 12px 12px; gap: 8px; }
+  .chip-impact { color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .chip-fact { display: flex; gap: 10px; font-size: 12px; align-items: baseline; }
+  .chip-fact-k { color: var(--dim); flex: none; min-width: 52px; }
+  .chip-fact-v { color: var(--text); overflow-wrap: anywhere; }
+  .tech summary { cursor: pointer; color: var(--dim); font-size: 11px; }
+  .tech-pre {
+    margin: 6px 0 0; padding: 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-soft); color: var(--muted);
+    font-family: var(--mono); font-size: 11px; line-height: 1.5;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto;
+  }
+
+  /* approvals ---------------------------------------------------------- */
+  .approval {
+    max-width: 760px; padding: 18px;
+    border: 1px solid var(--border); border-radius: 18px;
+    background: var(--panel); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.25);
+  }
+  .approval.resolved { background: var(--bg-2); border-color: var(--border-soft); box-shadow: none; opacity: 0.9; }
+  .approval-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .approval-kicker {
+    font-size: 10.5px; letter-spacing: 0.08em; color: var(--dim);
+    font-weight: 600; text-transform: uppercase;
+  }
+  .approval-wait { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--amber); }
+  .approval-wait .dot { background: var(--amber); width: 5px; height: 5px; animation: pulse 1.8s ease-in-out infinite; }
+  .approval-title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; margin-bottom: 10px; }
+  .approval-detail {
+    margin: 0 0 10px; padding: 9px 11px; border-radius: 10px;
+    background: var(--bg-2); border: 1px solid var(--border-soft);
+  }
+  .approval-detail-k { font-size: 10.5px; color: var(--dim); margin-bottom: 3px; }
+  .approval-detail code {
+    display: block; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 132px; overflow: auto;
+  }
+  .approval-fact { display: flex; gap: 10px; font-size: 12.5px; padding: 4px 0; align-items: baseline; }
+  .approval-fact-k { color: var(--dim); min-width: 64px; flex: none; }
+  .approval-fact-v { color: var(--text); overflow-wrap: anywhere; }
+  .approval-impact { color: var(--muted); font-size: 12.5px; line-height: 1.6; margin: 8px 0 0; }
+  .approval-why { color: var(--dim); font-size: 11.5px; line-height: 1.55; margin: 6px 0 0; }
+  .approval-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; align-items: stretch; }
+  .approval-actions .field { flex: 0 0 auto; }
+  .approval-choose { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+  .approval-note { min-height: 38px; font-size: 12.5px; margin-top: 0; }
+  .approval-done { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .approval-pill {
+    font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .approval-pill.ok { color: var(--green); border-color: rgba(76, 195, 138, 0.32); }
+  .approval-pill.no { color: var(--red); border-color: rgba(224, 108, 117, 0.32); }
+  .approval-tech { margin-top: 12px; }
+
+  /* composer ----------------------------------------------------------- */
+  .composer {
+    padding: 8px 24px calc(14px + var(--safe-b));
+    border-top: 0; background: transparent;
+  }
+  .composer-box {
+    max-width: 760px; margin: 0 auto;
+    padding: 7px 8px 7px 16px; border-radius: 22px;
+    background: var(--panel); border: 1px solid var(--border);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+  .composer-box:focus-within { border-color: var(--border-strong); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22); }
+  .composer textarea { font-size: 14px; padding: 5px 0; color: var(--text); }
+  .send-btn {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--text); color: var(--bg);
+  }
+  .send-btn:hover { background: var(--text); opacity: 0.86; }
+  .send-btn:disabled { background: var(--panel-3); color: var(--dim); opacity: 1; }
+  .composer-hint { max-width: 760px; margin: 7px auto 0; padding: 0; text-align: center; font-size: 10.5px; }
+  .notice.slim {
+    max-width: 760px; width: calc(100% - 48px); margin: 0 auto 8px;
+    padding: 6px 12px; border-radius: 10px; gap: 8px;
+    border-color: var(--border-soft); background: var(--bg-2); color: var(--dim);
+    font-size: 11.5px;
+  }
+  .notice.slim .link-btn { margin-left: auto; color: var(--text); font-size: 11.5px; text-decoration: underline; text-underline-offset: 3px; }
+  .notice.slim .link-btn:hover { color: var(--muted); }
+
+  /* buttons + fields --------------------------------------------------- */
+  .btn { border-radius: 9px; background: var(--panel-2); border-color: var(--border); min-height: 34px; font-weight: 500; }
+  .btn:hover { border-color: var(--border-strong); }
+  .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 600; }
+  .btn.primary:hover { background: var(--text); border-color: var(--text); opacity: 0.88; }
+  .btn.ghost { background: transparent; color: var(--muted); }
+  .btn.tiny { min-height: 27px; border-radius: 7px; }
+  .field {
+    min-height: 36px; border-radius: 9px; background: var(--bg-2);
+    border-color: var(--border); font-size: 13px;
+  }
+  .field:focus { border-color: var(--border-strong); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05); }
+  .switch-row input { accent-color: var(--text); }
+  .seg { background: var(--bg-2); border-color: var(--border); padding: 3px; border-radius: 10px; }
+  .seg-btn { min-height: 31px; border-radius: 7px; }
+  .seg-btn:hover { background: var(--panel-2); }
+  .seg-btn.active { background: var(--panel-3); color: var(--text); }
+  .seg-btn.active:hover { background: var(--panel-3); }
+
+  /* right panel -------------------------------------------------------- */
+  .panel { background: var(--bg-2); border-left: 1px solid var(--border-soft); }
+  .tab { border-radius: 7px; border-bottom-width: 0; }
+  .tab.active { color: var(--text); background: var(--panel-2); border-bottom-color: transparent; }
+  .tab:hover { background: var(--panel-2); }
+  .panel-body { padding: 14px 16px 28px; }
+  .section-head { letter-spacing: 0.04em; text-transform: none; font-weight: 600; }
+  .card { background: var(--panel); border-color: var(--border-soft); border-radius: 12px; }
+
+  /* account popover ---------------------------------------------------- */
+  .account-menu {
+    left: 10px; bottom: calc(112px + var(--safe-b));
+    width: min(272px, calc(var(--side-w, 272px) - 20px));
+    padding: 8px; border-radius: 14px;
+    background: var(--panel); border-color: var(--border);
+    box-shadow: var(--shadow-2);
+  }
+  .am-head { padding: 8px; gap: 9px; margin-bottom: 4px; }
+  .am-head .am-avatar { width: 30px; height: 30px; font-size: 12px; }
+  .am-name { font-size: 13px; font-weight: 500; }
+  .am-sub { font-size: 11px; }
+  .am-actions { display: flex; flex-direction: column; gap: 1px; margin: 0; padding-top: 5px; border-top: 1px solid var(--border-soft); }
+  .am-action {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; padding: 8px; border-radius: 8px;
+    font-size: 12.5px; color: var(--text); text-align: left;
+  }
+  .am-action:hover { background: var(--panel-2); }
+  .am-action span { color: var(--dim); }
+  .am-note { padding: 8px 8px 4px; font-size: 10.5px; line-height: 1.55; }
+
+  /* settings modal ----------------------------------------------------- */
+  .settings-modal {
+    position: fixed; inset: 0; margin: auto; z-index: 90;
+    width: min(860px, calc(100vw - 40px));
+    height: min(660px, calc(100vh - 48px));
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 20px;
+    box-shadow: var(--shadow-2);
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transform: translateY(10px) scale(0.985);
+    transition: opacity 160ms var(--ease), transform 160ms var(--ease), visibility 0s linear 160ms;
+  }
+  .settings-modal.open {
+    opacity: 1; visibility: visible; pointer-events: auto; transform: none;
+    transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+  }
+  .settings-top {
+    flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px 12px 20px; border-bottom: 1px solid var(--border-soft);
+  }
+  .settings-heading { font-size: 14px; font-weight: 600; }
+  .settings-body { flex: 1; min-height: 0; display: flex; }
+  .settings-nav {
+    flex: none; width: 176px; padding: 10px; border-right: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .setnav {
+    text-align: left; padding: 8px 10px; border-radius: 8px;
+    font-size: 12.5px; color: var(--muted); min-height: 34px;
+  }
+  .setnav:hover { background: var(--panel-2); color: var(--text); }
+  .setnav.active { background: var(--panel-2); color: var(--text); font-weight: 500; }
+  .settings-scroll {
+    flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain;
+    padding: 22px 28px 40px; scroll-behavior: smooth;
+  }
+  .dsec {
+    padding: 0 0 24px; margin: 0 0 24px;
+    border-bottom: 1px solid var(--border-soft);
+    scroll-margin-top: 12px;
+  }
+  .dsec:last-child { border-bottom: 0; margin-bottom: 0; }
+  .dsec-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; letter-spacing: 0; }
+  .dsec-sub { font-size: 12px; line-height: 1.6; margin-bottom: 14px; color: var(--dim); }
+  .dsec .lbl { font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
+  .btn-row { margin-top: 18px; }
+  .settings-scroll .btn-row .btn { flex: 0 0 auto; min-width: 112px; }
+  .pair-card { background: var(--bg-2); border-radius: 12px; border-color: var(--border-soft); background-image: none; }
+  .kv { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  .kv:last-child { border-bottom: 0; }
+  .kv .k { color: var(--dim); flex: none; }
+  .kv .v { color: var(--text); text-align: right; overflow-wrap: anywhere; }
+  .row-note { color: var(--dim); font-size: 11px; }
+  .set-status { background: var(--bg-2); border-color: var(--border); }
+  .notice-inline { border-color: rgba(217, 168, 92, 0.26); background: rgba(217, 168, 92, 0.07); color: #dfc191; }
+
+  /* light theme -------------------------------------------------------- */
+  html[data-theme="light"] {
+    --bg: #ffffff;
+    --bg-2: #f7f7f8;
+    --panel: #ffffff;
+    --panel-2: #f1f1f2;
+    --panel-3: #e7e7e9;
+    --border: #e4e4e7;
+    --border-soft: #ededf0;
+    --border-strong: #c9c9cf;
+    --text: #17171a;
+    --muted: #616168;
+    --dim: #909097;
+    --accent: #17171a;
+    --accent-2: #3a3a40;
+    --accent-soft: rgba(0, 0, 0, 0.05);
+    --green: #128a58;
+    --amber: #96660f;
+    --red: #c2383f;
+  }
+  html[data-theme="light"] body { background: var(--bg); }
+  html[data-theme="light"] .sidebar { background: var(--bg-2); }
+  html[data-theme="light"] .brand-mark { background: linear-gradient(145deg, #202024, #6b6b74); }
+  html[data-theme="light"] .bot:hover,
+  html[data-theme="light"] .group:hover { background: rgba(0, 0, 0, 0.045); }
+  html[data-theme="light"] .bot.active,
+  html[data-theme="light"] .group.active { background: var(--panel-3); }
+  html[data-theme="light"] .chip summary:hover { background: rgba(0, 0, 0, 0.025); }
+  html[data-theme="light"] .choice:hover { background: var(--panel-2); border-color: var(--border-strong); }
+  html[data-theme="light"] .row.user .bubble {
+    background: var(--panel-2); border-color: transparent;
+  }
+  html[data-theme="light"] .row.assistant .bubble {
+    background: var(--panel); border-color: var(--border-soft);
+    box-shadow: 0 1px 2px rgba(20, 28, 50, 0.04);
+  }
+  html[data-theme="light"] .row.assistant .bubble.system {
+    background: transparent; border-color: transparent; box-shadow: none;
+  }
+  html[data-theme="light"] .tech-pre { background: rgba(0, 0, 0, 0.035); }
+  html[data-theme="light"] .composer-box { box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06); }
+  html[data-theme="light"] .approval { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.08); }
+  html[data-theme="light"] .field:focus { box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05); }
+  html[data-theme="light"] .bubble.md .md-code { background: var(--bg-2); }
+  html[data-theme="light"] .bubble.md .md-table th { background: rgba(0, 0, 0, 0.04); }
+  html[data-theme="light"] .pc-screen { background: #f0f0f2; }
+  html[data-theme="light"] .scrim { background: rgba(24, 24, 27, 0.28); }
+  html[data-theme="light"] .account-menu { box-shadow: 0 24px 64px rgba(0, 0, 0, 0.16); }
+  html[data-theme="light"] .settings-modal { box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18); }
+  html[data-theme="light"] .select.field { background-color: var(--bg-2); }
+
+  /* phone -------------------------------------------------------------- */
+  @media (max-width: 860px) {
+    .sidebar {
+      top: 0; background: var(--bg-2);
+      width: min(86vw, 320px);
+      padding-top: var(--safe-t);
+      z-index: 60;
+    }
+    .side-top { padding-top: 12px; }
+    .side-close { display: grid; }
+    .new-bot { margin-left: auto; }
+    .side-account .am-avatar { width: 32px; height: 32px; }
+    .account-menu { left: 10px; bottom: calc(168px + var(--safe-b)); width: min(272px, calc(100vw - 20px)); }
+    /* The panel has its own top-right button; a second dock here is clutter. */
+    .mobilenav { display: none; }
+    .toast { top: calc(64px + var(--safe-t)); bottom: auto; }
+
+    .chat-head { padding: 8px 12px; min-height: 54px; gap: 8px; }
+    #nav-toggle { display: grid; }
+    .chat-head .sub { max-width: 42vw; }
+    .chat-head .icon-btn { width: var(--touch); height: var(--touch); }
+    #nav-toggle, #panel-toggle { width: 36px; height: 36px; }
+    .chat-head-actions { gap: 2px; }
+    .pill.soft { display: none; }
+
+    .messages { padding: 16px 14px 6px; gap: 14px; }
+    .row.user .bubble { max-width: 88%; }
+    .empty { padding: 8px 2px 20px; }
+    .empty h2 { font-size: 19px; }
+    .empty-mark { width: 32px; height: 32px; border-radius: 9px; font-size: 13px; }
+    .choice { padding: 10px; }
+    .choice-key { width: 22px; height: 22px; }
+
+    .composer { padding: 6px 12px calc(10px + var(--safe-b)); }
+    .composer-box { border-radius: 20px; padding: 6px 7px 6px 14px; }
+    .composer-hint { display: none; }
+    .notice.slim { width: calc(100% - 24px); margin-bottom: 6px; }
+    .send-btn { width: 34px; height: 34px; }
+
+    .approval { padding: 14px; border-radius: 16px; }
+    .approval-title { font-size: 15px; }
+    .chip summary { min-height: 40px; padding: 9px 11px; }
+    .settings-scroll .btn-row .btn { flex: 1 1 0; min-width: 0; }
+
+    .settings-modal {
+      width: 100%; height: 100%; max-height: none;
+      border: 0; border-radius: 0;
+    }
+    .settings-body { flex-direction: column; }
+    .settings-nav {
+      width: auto; flex-direction: row; overflow-x: auto; flex: none;
+      padding: 7px 10px; gap: 2px;
+      border-right: 0; border-bottom: 1px solid var(--border-soft);
+    }
+    .setnav { white-space: nowrap; min-height: 33px; padding: 6px 10px; }
+    .settings-scroll { padding: 16px 16px calc(32px + var(--safe-b)); }
+    .dsec { padding-bottom: 20px; margin-bottom: 20px; }
+  }
+  @media (max-width: 420px) {
+    .messages { padding-left: 12px; padding-right: 12px; }
+    .composer { padding-left: 10px; padding-right: 10px; }
+    .chat-head .sub { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -1353,29 +2200,12 @@
      app shell
      ===================================================================== -->
 <div class="app is-hidden" id="app">
-  <header class="topbar">
-    <button class="icon-btn" id="nav-toggle" aria-label="打开团队列表" aria-expanded="false" aria-controls="sidebar">☰</button>
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true"></div>
-      <span id="assistant-name">Desk</span>
-      <small id="assistant-persona-short">bots with their own computer</small>
-    </div>
-    <div class="spacer"></div>
-    <div class="pill" id="model-pill" title="model provider">
-      <span class="dot" id="health-dot"></span>
-      <span id="model-label">mock</span>
-    </div>
-    <div class="pill tz" id="timezone-pill" title="assistant timezone">—</div>
-    <button class="pill warn" id="approvals-pill" type="button" hidden>待审批</button>
-    <button class="icon-btn" id="panel-toggle" aria-label="工作面板" title="工作面板">▤</button>
-    <button class="icon-btn account-btn" id="account-btn" aria-label="账户与设备" title="账户与设备">D</button>
-    <button class="icon-btn" id="settings-btn" aria-label="设置" title="设置">⚙</button>
-    <div class="winbtns" id="winbtns">
-      <button type="button" data-win="min" aria-label="最小化" title="最小化">&#8211;</button>
-      <button type="button" data-win="max" aria-label="最大化" title="最大化">&#9633;</button>
-      <button type="button" data-win="close" class="win-close" aria-label="关闭" title="关闭">&#10005;</button>
-    </div>
-  </header>
+  <div class="drag-strip" aria-hidden="true"></div>
+  <div class="winbtns" id="winbtns">
+    <button type="button" data-win="min" aria-label="最小化" title="最小化">&#8211;</button>
+    <button type="button" data-win="max" aria-label="最大化" title="最大化">&#9633;</button>
+    <button type="button" data-win="close" class="win-close" aria-label="关闭" title="关闭">&#10005;</button>
+  </div>
 
   <div class="account-menu" id="account-menu" hidden>
     <div class="am-head">
@@ -1385,84 +2215,133 @@
         <div class="am-sub" id="am-sub">本机模式</div>
       </div>
     </div>
-    <div class="am-row"><span>版本</span><b id="am-version">—</b></div>
-    <div class="am-row"><span>连接</span><b id="am-origin">—</b></div>
-    <div class="am-row"><span>配对数</span><b id="am-devices">1</b></div>
     <div class="am-actions">
-      <button class="btn tiny" id="am-pair" type="button">手机配对</button>
-      <button class="btn tiny" id="am-settings" type="button">设置</button>
+      <button class="am-action" id="am-pair" type="button">手机配对 <span aria-hidden="true">›</span></button>
+      <button class="am-action" id="am-settings" type="button">设置 <span aria-hidden="true">›</span></button>
     </div>
-    <div class="am-note">这不是云端账号：Desk 没有服务器替你记账。你拥有的是一台机器 + 一个配对码。</div>
+    <div class="am-note">数据保存在这台电脑上，不会上传到云端。</div>
   </div>
 
   <div class="main">
     <!-- left -->
     <div class="scrim" id="sidebar-scrim" aria-hidden="true"></div>
     <aside class="sidebar" id="sidebar" aria-label="团队">
-      <div class="edge-resizer sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度"></div>
-      <div class="drawer-head">
-        <span class="drawer-title">Desk</span>
-        <button class="icon-btn sm" id="sidebar-close" aria-label="关闭团队列表">✕</button>
-      </div>
+      <div class="edge-resizer sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" title="拖动调整宽窄，双击恢复默认"></div>
 
-      <div class="side-section">
-        <div class="side-head"><span>Team · <span id="bot-count" class="mono">0</span></span></div>
-        <div class="bot-list" id="bot-list"></div>
-      </div>
-
-      <div class="side-section" id="groups-section">
-        <div class="side-head"><span>群组 · <span id="group-count" class="mono">0</span></span></div>
-        <div class="group-list" id="group-list"></div>
-        <div class="side-hint" id="groups-hint" hidden>这个版本的服务端还没有群组接口（404）。</div>
-      </div>
-
-      <div class="new-bot">
-        <button class="ghost-btn" id="new-bot-btn" aria-haspopup="menu" aria-expanded="false">+ 新建</button>
-        <div class="menu" id="new-menu" role="menu" hidden>
-          <button type="button" role="menuitem" data-act="bot">新建 Bot</button>
-          <button type="button" role="menuitem" data-act="group" id="new-group-item">新建群组</button>
-        </div>
-        <div class="bot-form" id="bot-form">
-          <input class="field" id="new-bot-name" placeholder="Name (e.g. Scribe)" autocomplete="off" />
-          <input class="field" id="new-bot-role" placeholder="Role (e.g. keeps the minutes)" autocomplete="off" />
-          <div class="row-2" style="display:flex; gap:8px;">
-            <button class="btn primary tiny" id="new-bot-save" style="flex:1">Create</button>
-            <button class="btn tiny" id="new-bot-cancel" style="flex:1">Cancel</button>
+      <div class="side-top">
+        <div class="side-brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div class="side-brand-text">
+            <b id="assistant-name">Desk</b>
+            <small id="assistant-persona-short">每个助手都有自己的电脑</small>
           </div>
         </div>
+        <div class="new-bot">
+          <button class="round-btn" id="new-bot-btn" type="button" aria-label="新建助手或群组" title="新建" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <div class="menu" id="new-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-act="bot">新建助手</button>
+            <button type="button" role="menuitem" data-act="group" id="new-group-item">新建群组</button>
+          </div>
+        </div>
+        <button class="icon-btn sm side-close" id="sidebar-close" aria-label="关闭团队列表">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
-      <div class="sidebar-foot" id="workspace-foot">workspace …</div>
+
+      <div class="bot-form" id="bot-form">
+        <div class="bot-form-head">新建助手</div>
+        <input class="field" id="new-bot-name" placeholder="名字（例如：小笔）" autocomplete="off" />
+        <input class="field" id="new-bot-role" placeholder="职责（例如：整理会议纪要）" autocomplete="off" />
+        <div class="row-2" style="display:flex; gap:8px;">
+          <button class="btn primary tiny" id="new-bot-save" style="flex:1">创建</button>
+          <button class="btn tiny" id="new-bot-cancel" style="flex:1">取消</button>
+        </div>
+      </div>
+
+      <div class="sidebar-scroll">
+        <div class="side-section">
+          <div class="side-head"><span>助手</span><span id="bot-count" class="count">0</span></div>
+          <div class="bot-list" id="bot-list"></div>
+        </div>
+
+        <div class="side-section" id="groups-section">
+          <div class="side-head"><span>群组</span><span id="group-count" class="count">0</span></div>
+          <div class="group-list" id="group-list"></div>
+          <div class="side-hint" id="groups-hint" hidden>这个版本的服务端还没有群组接口（404）。</div>
+        </div>
+      </div><!-- /sidebar-scroll -->
+
+      <div class="sidebar-bottom" id="sidebar-bottom">
+        <button class="side-account" id="account-btn" type="button" aria-label="账户与设备" title="账户与设备">
+          <span class="am-avatar" id="side-avatar">D</span>
+          <span class="side-account-text">
+            <b id="side-account-name">Desk</b>
+            <small id="side-account-sub">本机模式</small>
+          </span>
+          <span class="side-account-more" aria-hidden="true">⋯</span>
+        </button>
+        <div class="side-meta">
+          <div class="pill" id="model-pill" title="模型">
+            <span class="dot" id="health-dot"></span>
+            <span id="model-label">mock</span>
+          </div>
+        </div>
+        <div class="side-actions">
+          <button class="side-action" id="theme-btn" type="button" title="切换外观">
+            <span id="theme-btn-glyph" aria-hidden="true">◐</span>
+            <span id="theme-btn-label">跟随系统</span>
+          </button>
+          <button class="side-action" id="settings-btn" type="button" title="设置">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="7" cy="17" r="2"/></svg>
+            <span>设置</span>
+          </button>
+        </div>
+      </div>
     </aside>
 
     <!-- center -->
     <section class="chat">
       <div class="chat-head">
-        <button class="av chat-avatar" id="chat-avatar" type="button" aria-label="更换头像" title="更换头像"><span class="av-face"></span></button>
-        <div class="stack chat-stack" id="chat-stack" role="group" aria-label="群成员" hidden></div>
-        <div style="min-width:0">
-          <div class="title" id="chat-title">Chief</div>
-          <div class="sub" id="chat-sub">coordinator</div>
+        <button class="icon-btn" id="nav-toggle" type="button" aria-label="打开助手列表" aria-expanded="false" title="助手列表">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="chat-title-wrap">
+          <button class="av chat-avatar" id="chat-avatar" type="button" aria-label="更换头像" title="更换头像"><span class="av-face"></span></button>
+          <div class="stack chat-stack" id="chat-stack" role="group" aria-label="群成员" hidden></div>
+          <div class="chat-title-text">
+            <div class="title" id="chat-title">总管</div>
+            <div class="sub" id="chat-sub">协调者</div>
+          </div>
         </div>
-        <div class="spacer"></div>
-        <div class="pill" id="group-members-pill" hidden>3 位成员</div>
-        <div class="pill" id="bot-tools-pill">0 tools</div>
+        <div class="chat-head-actions">
+          <button class="pill warn" id="approvals-pill" type="button" hidden title="有待你确认的操作">待确认</button>
+          <div class="pill soft" id="group-members-pill" hidden>3 位成员</div>
+          <button class="icon-btn" id="group-delete-btn" type="button" hidden aria-label="删除这个群组" title="删除这个群组">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+          </button>
+          <button class="icon-btn" id="panel-toggle" type="button" aria-label="工作面板" aria-pressed="false" title="工作面板">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M14 4v16"/></svg>
+          </button>
+        </div>
       </div>
 
       <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
 
-      <div class="notice" id="mock-banner" hidden>
-        <span>mock 模式 · 回答是脚本化演示，不是真实模型</span>
-        <button class="btn tiny" id="mock-banner-btn" type="button">配置模型</button>
+      <div class="notice slim" id="mock-banner" hidden>
+        <span>现在是演示模式，回答由脚本生成。</span>
+        <button class="link-btn" id="mock-banner-btn" type="button">接入真实模型</button>
       </div>
 
       <div class="composer">
         <div class="composer-box">
-          <textarea id="composer" rows="1" placeholder="Ask Chief to do something…" aria-label="消息"></textarea>
-          <button class="send-btn" id="send-btn" title="发送 (Enter)" aria-label="发送">↑</button>
+          <textarea id="composer" rows="1" placeholder="给总管发消息…" aria-label="消息"></textarea>
+          <button class="send-btn" id="send-btn" title="发送（Enter）" aria-label="发送">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+          </button>
         </div>
-        <div class="composer-hint" id="composer-hint">
-          Enter 发送 · Shift+Enter 换行 · HIGH 风险操作总会先等你批准
-        </div>
+        <div class="composer-hint" id="composer-hint">需要动你电脑的操作，会先问过你</div>
       </div>
     </section>
 
@@ -1472,16 +2351,16 @@
       <div class="edge-resizer panel-resizer" id="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整面板宽度"></div>
       <div class="grip" id="panel-grip" aria-hidden="true"><span></span></div>
       <div class="tabs" role="tablist" aria-label="面板页签">
-        <button class="tab active" data-tab="activity" role="tab" aria-selected="true">Activity</button>
+        <button class="tab active" data-tab="activity" role="tab" aria-selected="true">活动</button>
         <button class="tab" data-tab="computer" role="tab" aria-selected="false">电脑</button>
-        <button class="tab" data-tab="skills" role="tab" aria-selected="false">Skills</button>
-        <button class="tab" data-tab="routines" role="tab" aria-selected="false">Routines</button>
-        <button class="tab" data-tab="memory" role="tab" aria-selected="false">Memory</button>
+        <button class="tab" data-tab="skills" role="tab" aria-selected="false">技能</button>
+        <button class="tab" data-tab="routines" role="tab" aria-selected="false">定时任务</button>
+        <button class="tab" data-tab="memory" role="tab" aria-selected="false">记忆</button>
         <button class="icon-btn sm panel-close" id="panel-close" aria-label="关闭面板">✕</button>
       </div>
       <div class="panel-body">
         <div class="pane active" id="pane-activity" role="tabpanel">
-          <div class="section-head"><span>Live events</span><span id="activity-count" class="mono">0</span></div>
+          <div class="section-head"><span>实时事件</span><span id="activity-count" class="mono">0</span></div>
           <label class="switch-row" for="show-process">
             <input type="checkbox" id="show-process" />
             <span>在对话里显示工具过程</span>
@@ -1490,65 +2369,85 @@
         </div>
 
         <div class="pane" id="pane-computer" role="tabpanel">
+          <div class="pc-target-bar">
+            <span class="pc-target-label">接管</span>
+            <select class="field pc-target-select" id="pc-target" aria-label="选择要接管的机器"></select>
+            <button class="btn tiny" id="pc-target-add" type="button">+ 机器</button>
+          </div>
+          <div class="pc-target-foot">
+            <span class="pc-target-hint" id="pc-target-hint">本机：Desk 运行在这台电脑上</span>
+            <button class="pc-link" id="pc-target-edit" type="button" hidden>编辑当前机器</button>
+          </div>
           <div class="section-head">
             <span>那台机器</span>
-            <button class="btn tiny" id="pc-refresh" type="button">刷新</button>
+            <span class="pc-actions">
+              <button class="btn tiny" id="pc-max" type="button">全屏</button>
+              <button class="btn tiny" id="pc-desktop" type="button">接管桌面</button>
+              <button class="btn tiny" id="pc-refresh" type="button">刷新</button>
+            </span>
           </div>
           <div class="pc-screen" id="pc-screen-wrap">
             <img id="pc-screen" alt="Hub 屏幕" />
             <div class="pc-screen-note" id="pc-screen-note">还没有截屏</div>
+            <div class="pc-remote" id="pc-remote" hidden>
+              <svg class="pc-remote-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="12" rx="2"></rect>
+                <path d="M8 20h8M12 16v4"></path>
+              </svg>
+              <div class="pc-remote-name" id="pc-remote-name">—</div>
+              <div class="pc-remote-addr mono" id="pc-remote-addr">—</div>
+              <div class="pc-remote-note">这是一台远程机器。接管后可以直接操作它的鼠标和键盘。</div>
+              <button class="btn primary tiny" id="pc-remote-connect" type="button">连接这台机器</button>
+            </div>
+            <div class="pc-vnc-layer" id="pc-vnc-wrap" hidden></div>
+            <div class="pc-vnc-shield" id="pc-vnc-shield" hidden>
+              <div class="pc-preview-badge"><i></i><span id="pc-preview-name">实时画面</span></div>
+              <button class="btn primary" id="pc-preview-take" type="button">接管桌面</button>
+            </div>
+            <button class="pc-exit" id="pc-exit" type="button">退出全屏 (Esc)</button>
           </div>
           <div class="pc-stats" id="pc-stats"></div>
-          <div class="section-head" style="margin-top:14px">
-            <span>桌面</span>
-            <span style="display:flex;gap:6px">
-              <button class="btn tiny" id="pc-max" type="button">全屏</button>
-              <button class="btn tiny" id="pc-desktop" type="button">接管桌面</button>
-            </span>
-          </div>
-          <div class="pc-vnc" id="pc-vnc-wrap">
-            <div class="pc-screen-note">点「接管桌面」在这台机器上开一个窗口：能看屏幕、能点、能打字。</div>
-          </div>
-          <div class="section-head" style="margin-top:14px"><span>进程</span></div>
+          <div class="section-head" id="pc-procs-head" style="margin-top:14px"><span>进程</span></div>
           <div id="pc-procs"></div>
+          <div class="row-note" id="pc-local-note" hidden>远程接管只传画面。这台电脑的 CPU 和进程信息已隐藏，切回「这台电脑」可以查看。</div>
         </div>
 
         <div class="pane" id="pane-skills" role="tabpanel">
-          <div class="section-head"><span>Shared library</span><span id="skills-count" class="mono">0</span></div>
+          <div class="section-head"><span>共享技能库</span><span id="skills-count" class="mono">0</span></div>
           <div id="skills-list"></div>
         </div>
 
         <div class="pane" id="pane-routines" role="tabpanel">
-          <div class="section-head"><span>Scheduled runs</span><button class="btn tiny" id="new-routine-btn">+ New</button></div>
+          <div class="section-head"><span>定时运行</span><button class="btn tiny" id="new-routine-btn">+ 新建</button></div>
           <div class="card" id="routine-form-card" style="display:none">
             <div class="form-grid">
-              <input class="field" id="rt-name" placeholder="Name (e.g. Morning brief)" autocomplete="off" />
-              <textarea class="field" id="rt-instruction" rows="2" placeholder="Instruction for the bot…"></textarea>
+              <input class="field" id="rt-name" placeholder="名字（例如：早间简报）" autocomplete="off" />
+              <textarea class="field" id="rt-instruction" rows="2" placeholder="给这个助手的指令…"></textarea>
               <div class="row-2">
                 <select class="field" id="rt-bot"></select>
                 <input class="field" id="rt-schedule" value="every 60 minutes" autocomplete="off" />
               </div>
               <div class="row-2">
-                <button class="btn primary tiny" id="rt-save">Create routine</button>
-                <button class="btn tiny" id="rt-cancel">Cancel</button>
+                <button class="btn primary tiny" id="rt-save">创建定时任务</button>
+                <button class="btn tiny" id="rt-cancel">取消</button>
               </div>
-              <div class="tiny muted">Schedule: “every 30 minutes” or a 5-field cron like “0 9 * * 1-5”.</div>
+              <div class="tiny muted">时间写法：“every 30 minutes”，或 5 段 cron，例如 “0 9 * * 1-5”。</div>
             </div>
           </div>
           <div id="routines-list"></div>
         </div>
 
         <div class="pane" id="pane-memory" role="tabpanel">
-          <div class="section-head"><span id="memory-title">Memory</span><button class="btn tiny" id="memory-refresh">Refresh</button></div>
+          <div class="section-head"><span id="memory-title">记忆</span><button class="btn tiny" id="memory-refresh">刷新</button></div>
           <div class="card">
-            <div class="card-title">Shared facts</div>
+            <div class="card-title">共享记忆</div>
             <div class="card-sub mono tiny" id="shared-path">—</div>
-            <pre class="mem-pre" id="shared-pre" style="margin-top:8px">loading…</pre>
+            <pre class="mem-pre" id="shared-pre" style="margin-top:8px">正在读取…</pre>
           </div>
           <div class="card">
-            <div class="card-title" id="bot-memory-title">This bot</div>
+            <div class="card-title" id="bot-memory-title">这个助手的记忆</div>
             <div class="card-sub mono tiny" id="bot-memory-path">—</div>
-            <pre class="mem-pre" id="bot-memory-pre" style="margin-top:8px">loading…</pre>
+            <pre class="mem-pre" id="bot-memory-pre" style="margin-top:8px">正在读取…</pre>
           </div>
         </div>
       </div>
@@ -1556,93 +2455,125 @@
   </div>
 
   <nav class="mobilenav" id="mobilenav" aria-label="工作面板">
-    <button class="navitem" data-tab="activity" aria-label="Activity"><span class="navglyph" aria-hidden="true">◎</span><span>Activity</span></button>
-    <button class="navitem" data-tab="skills" aria-label="Skills"><span class="navglyph" aria-hidden="true">✦</span><span>Skills</span></button>
-    <button class="navitem" data-tab="routines" aria-label="Routines"><span class="navglyph" aria-hidden="true">⏱</span><span>Routines</span></button>
-    <button class="navitem" data-tab="memory" aria-label="Memory"><span class="navglyph" aria-hidden="true">◈</span><span>Memory</span></button>
+    <button class="navitem" data-tab="activity" aria-label="活动"><span class="navglyph" aria-hidden="true">◎</span><span>活动</span></button>
+    <button class="navitem" data-tab="skills" aria-label="技能"><span class="navglyph" aria-hidden="true">✦</span><span>技能</span></button>
+    <button class="navitem" data-tab="routines" aria-label="定时任务"><span class="navglyph" aria-hidden="true">⏱</span><span>定时</span></button>
+    <button class="navitem" data-tab="memory" aria-label="记忆"><span class="navglyph" aria-hidden="true">◈</span><span>记忆</span></button>
   </nav>
 </div>
 
 <!-- =====================================================================
-     settings drawer
+     settings
      ===================================================================== -->
 <div class="scrim" id="settings-scrim" aria-hidden="true"></div>
-<aside class="drawer" id="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-hidden="true">
-  <div class="drawer-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <span class="drawer-title" id="settings-title">设置</span>
+<div class="settings-modal" id="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-hidden="true">
+  <div class="settings-top">
+    <span class="settings-heading" id="settings-title">设置</span>
     <button class="icon-btn" id="settings-close" aria-label="关闭设置">✕</button>
   </div>
-  <div class="drawer-body">
-    <div class="notice-inline" id="settings-note" hidden></div>
+  <div class="settings-body">
+    <nav class="settings-nav" id="settings-nav" aria-label="设置分类">
+      <button class="setnav active" type="button" data-set-target="sec-model">模型</button>
+      <button class="setnav" type="button" data-set-target="sec-run">运行方式</button>
+      <button class="setnav" type="button" data-set-target="sec-appearance">外观</button>
+      <button class="setnav" type="button" data-set-target="sec-pair">手机配对</button>
+      <button class="setnav" type="button" data-set-target="sec-about">关于</button>
+    </nav>
+    <div class="settings-scroll" id="settings-scroll">
+      <div class="notice-inline" id="settings-note" hidden></div>
 
-    <form class="dsec" id="settings-form" novalidate>
-      <div class="dsec-head">模型</div>
-      <p class="dsec-sub">配置一个真实模型后，Desk 才会理解你的话；不配置时用内置 mock（脚本化演示，不会真的思考）。</p>
+      <section class="dsec" id="sec-model">
+        <div class="dsec-head">模型</div>
+        <p class="dsec-sub">接入一个真实模型，Desk 才能听懂你的话。不接入时用内置演示，回答是脚本写好的。</p>
 
-      <label class="lbl" for="set-provider">Provider</label>
-      <select class="field" id="set-provider">
-        <option value="mock">mock · 演示（无需密钥）</option>
-        <option value="openai">openai · 兼容 OpenAI 接口</option>
-      </select>
+        <form id="settings-form" novalidate>
+          <label class="lbl" for="set-provider">服务商</label>
+          <select class="field" id="set-provider">
+            <option value="mock">演示模式（无需密钥）</option>
+            <option value="openai">OpenAI 兼容接口</option>
+          </select>
 
-      <label class="lbl" for="set-baseurl">Base URL</label>
-      <input class="field" id="set-baseurl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" inputmode="url" />
+          <label class="lbl" for="set-baseurl">接口地址</label>
+          <input class="field" id="set-baseurl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" inputmode="url" />
 
-      <label class="lbl" for="set-model">Model</label>
-      <input class="field" id="set-model" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+          <label class="lbl" for="set-model">模型</label>
+          <input class="field" id="set-model" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
 
-      <label class="lbl" for="set-apikey">API Key</label>
-      <input class="field" id="set-apikey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
-      <div class="row-note" id="key-state">尚未保存密钥。</div>
+          <label class="lbl" for="set-apikey">API 密钥</label>
+          <input class="field" id="set-apikey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
+          <div class="row-note" id="key-state">尚未保存密钥。</div>
 
-      <div class="btn-row">
-        <button class="btn primary" id="set-save" type="submit">保存</button>
-        <button class="btn" id="set-test" type="button">测试连接</button>
-      </div>
-      <div class="set-status" id="set-status" role="status" hidden></div>
-      <div class="row-note" id="set-clear-wrap" hidden>
-        <button class="btn tiny danger" id="set-clear-key" type="button">清除已保存的密钥</button>
-      </div>
-    </form>
+          <div class="btn-row">
+            <button class="btn primary" id="set-save" type="submit">保存</button>
+            <button class="btn" id="set-test" type="button">测试连接</button>
+          </div>
+          <div class="set-status" id="set-status" role="status" hidden></div>
+          <div class="row-note" id="set-clear-wrap" hidden>
+            <button class="btn tiny danger" id="set-clear-key" type="button">清除已保存的密钥</button>
+          </div>
+        </form>
+      </section>
 
-    <section class="dsec">
-      <div class="dsec-head">运行方式</div>
-      <label class="switch-row" for="auto-approve-all" style="margin-top:6px">
-        <input type="checkbox" id="auto-approve-all" />
-        <span>完全自主：不再询问审批（这台机器专门给它用）</span>
-      </label>
-      <div class="row-note" id="policy-note">关着的时候，删数据、发邮件、写工作区外这类动作会停下来等你点确认。开开后它自己决定，所有决定仍然记进审计日志；命中危险命令黑名单（rm -rf 等）的仍然会问你。</div>
-    </section>
+      <section class="dsec" id="sec-run">
+        <div class="dsec-head">运行方式</div>
+        <label class="switch-row" for="auto-approve-all">
+          <input type="checkbox" id="auto-approve-all" />
+          <span>完全自主，不再逐条询问</span>
+        </label>
+        <div class="row-note" id="policy-note">关着的时候，删数据、发消息、写工作区外这类动作会停下来等你点确认。打开后它自己决定，所有决定仍会记录；命中危险命令黑名单（例如 rm -rf）的仍然会问你。</div>
+      </section>
 
-    <section class="dsec">
-      <div class="dsec-head">配对 · 手机访问</div>
-      <div class="pair-card">
-        <div class="pair-label">局域网地址</div>
-        <div class="pair-row">
-          <div class="pair-value mono" id="pair-url">—</div>
-          <button class="btn tiny" id="pair-copy-url" type="button">复制</button>
+      <section class="dsec" id="sec-appearance">
+        <div class="dsec-head">外观</div>
+        <div class="seg" id="theme-seg" role="radiogroup" aria-label="界面主题">
+          <button class="seg-btn" type="button" data-theme-choice="dark" role="radio" aria-checked="false">深色</button>
+          <button class="seg-btn" type="button" data-theme-choice="light" role="radio" aria-checked="false">浅色</button>
+          <button class="seg-btn" type="button" data-theme-choice="system" role="radio" aria-checked="false">跟随系统</button>
         </div>
-        <div class="pair-label" style="margin-top:16px">配对码</div>
-        <div class="pair-row">
-          <div class="pair-code" id="pair-code">—</div>
-          <button class="btn tiny" id="pair-copy-code" type="button">复制</button>
-        </div>
-        <div class="pair-hint">手机浏览器打开这个地址，输入配对码</div>
-        <div class="pair-empty" id="pair-empty" hidden></div>
-      </div>
-      <div class="row-note">配对码只用于把手机接进这台电脑上的 Desk，不会上传到任何地方。</div>
-    </section>
+        <div class="row-note">切换立即生效，只记在这台设备上。</div>
 
-    <section class="dsec">
-      <div class="dsec-head">关于</div>
-      <div class="kv"><span class="k">应用</span><span class="v" id="about-app">Desk</span></div>
-      <div class="kv"><span class="k">版本</span><span class="v" id="about-version">—</span></div>
-      <div class="kv"><span class="k">服务</span><span class="v" id="about-server">—</span></div>
-      <div class="kv"><span class="k">本机地址</span><span class="v" id="about-origin">—</span></div>
-      <div class="kv"><span class="k">访问控制</span><span class="v" id="about-auth">—</span></div>
-    </section>
+        <div class="dsec-head" style="margin-top:20px">时区</div>
+        <p class="dsec-sub">定时任务、时间和日志都按这个时区理解。接管远程机器时，可以让它跟着那台机器走。</p>
+        <div class="seg" id="tz-mode-seg" role="radiogroup" aria-label="时区来源">
+          <button class="seg-btn" type="button" data-tz-mode="local" role="radio" aria-checked="false">跟随这台设备</button>
+          <button class="seg-btn" type="button" data-tz-mode="target" role="radio" aria-checked="false">跟随接管机器</button>
+          <button class="seg-btn" type="button" data-tz-mode="manual" role="radio" aria-checked="false">手动选择</button>
+        </div>
+        <select class="field select" id="tz-select" hidden aria-label="选择时区"></select>
+        <div class="row-note" id="tz-note">当前时区：—</div>
+      </section>
+
+      <section class="dsec" id="sec-pair">
+        <div class="dsec-head">手机配对</div>
+        <div class="pair-card">
+          <div class="pair-label">局域网地址</div>
+          <div class="pair-row">
+            <div class="pair-value mono" id="pair-url">—</div>
+            <button class="btn tiny" id="pair-copy-url" type="button">复制</button>
+          </div>
+          <div class="pair-label" style="margin-top:16px">配对码</div>
+          <div class="pair-row">
+            <div class="pair-code" id="pair-code">—</div>
+            <button class="btn tiny" id="pair-copy-code" type="button">复制</button>
+          </div>
+          <div class="pair-hint">手机浏览器打开这个地址，输入配对码</div>
+          <div class="pair-empty" id="pair-empty" hidden></div>
+        </div>
+        <div class="row-note">配对码只用于把手机接进这台电脑上的 Desk，不会上传到任何地方。</div>
+      </section>
+
+      <section class="dsec" id="sec-about">
+        <div class="dsec-head">关于</div>
+        <div class="kv"><span class="k">应用</span><span class="v" id="about-app">Desk</span></div>
+        <div class="kv"><span class="k">版本</span><span class="v" id="about-version">—</span></div>
+        <div class="kv"><span class="k">服务</span><span class="v" id="about-server">—</span></div>
+        <div class="kv"><span class="k">接管地址</span><span class="v" id="about-origin">—</span></div>
+        <div class="kv"><span class="k">时区</span><span class="v" id="timezone-pill">—</span></div>
+        <div class="kv"><span class="k">访问控制</span><span class="v" id="about-auth">—</span></div>
+      </section>
+    </div>
   </div>
-</aside>
+</div>
 
 <!-- =====================================================================
      create group
@@ -1672,12 +2603,76 @@
 </div>
 
 <!-- =====================================================================
+     add / edit a machine to take over
+     ===================================================================== -->
+<div class="scrim" id="vnc-scrim" aria-hidden="true"></div>
+<div class="modal" id="vnc-modal" role="dialog" aria-modal="true" aria-labelledby="vnc-modal-title" aria-hidden="true">
+  <div class="modal-head">
+    <span class="modal-title" id="vnc-modal-title">连接一台机器</span>
+    <button class="icon-btn sm" id="vnc-modal-close" type="button" aria-label="关闭">✕</button>
+  </div>
+  <div class="modal-body">
+    <label class="form-label" for="vnc-name">给它起个名字</label>
+    <input class="field" id="vnc-name" placeholder="例如：Ubuntu 虚拟机" autocomplete="off" maxlength="40" />
+    <label class="form-label" for="vnc-addr" style="margin-top:8px">机器地址</label>
+    <input class="field" id="vnc-addr" placeholder="例如 192.168.1.20:6080" autocomplete="off" spellcheck="false" />
+    <div class="row-note">填那台机器上 noVNC 的地址。只写 IP 时默认用 6080 端口。</div>
+    <label class="form-label" for="vnc-pass" style="margin-top:8px">VNC 密码（没有就留空）</label>
+    <input class="field" id="vnc-pass" type="password" placeholder="••••••" autocomplete="off" />
+    <label class="form-label" for="vnc-tz" style="margin-top:8px">这台机器的时区（可不填）</label>
+    <select class="field select" id="vnc-tz"></select>
+    <div class="row-note">填了以后，「跟随接管机器」就能用上它的时间。自动配置成功时会自己填好。</div>
+
+    <div class="modal-sep"></div>
+    <div class="modal-section-title">自动配置这台机器</div>
+    <div class="row-note">如果这台机器还没有 VNC，Desk 可以用 SSH 帮它装好。需要 Ubuntu 桌面版和一个有 sudo 权限的账号；密码只用于这一次配置，不会被保存。</div>
+    <label class="switch-row" for="vnc-auto">
+      <input type="checkbox" id="vnc-auto" />
+      <span>连接后自动装好远程桌面</span>
+    </label>
+    <div id="vnc-ssh-fields" hidden>
+      <label class="form-label" for="vnc-ssh-user">SSH 用户名</label>
+      <input class="field" id="vnc-ssh-user" placeholder="ubuntu" autocomplete="off" spellcheck="false" />
+      <label class="form-label" for="vnc-ssh-pass">SSH 密码</label>
+      <input class="field" id="vnc-ssh-pass" type="password" placeholder="••••••" autocomplete="new-password" />
+      <label class="form-label" for="vnc-ssh-port">SSH 端口</label>
+      <input class="field" id="vnc-ssh-port" type="number" min="1" max="65535" value="22" />
+    </div>
+    <div class="modal-note" id="vnc-progress" hidden></div>
+
+    <div class="modal-note" id="vnc-modal-note" hidden></div>
+    <div class="row-note">这些信息只保存在这台电脑上。</div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn danger" id="vnc-delete" type="button" hidden>删除</button>
+    <button class="btn" id="vnc-cancel" type="button">取消</button>
+    <button class="btn primary" id="vnc-save" type="button">保存</button>
+  </div>
+</div>
+
+<!-- small yes/no dialog: deleting a group is not undoable -->
+<div class="scrim" id="confirm-scrim" aria-hidden="true"></div>
+<div class="modal modal-sm" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-hidden="true">
+  <div class="modal-head">
+    <span class="modal-title" id="confirm-title">确认删除</span>
+    <button class="icon-btn sm" id="confirm-close" type="button" aria-label="关闭">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="confirm-text" id="confirm-text">删除后无法恢复。</div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn" id="confirm-cancel" type="button">取消</button>
+    <button class="btn danger" id="confirm-ok" type="button">删除</button>
+  </div>
+</div>
+
+<!-- =====================================================================
      bot management
      ===================================================================== -->
 <div class="scrim" id="botedit-scrim" aria-hidden="true"></div>
 <aside class="avatar-sheet" id="botedit-sheet" role="dialog" aria-modal="true" aria-labelledby="botedit-title" aria-hidden="true">
   <div class="drawer-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <span class="drawer-title" id="botedit-title">管理 Bot</span>
+    <span class="drawer-title" id="botedit-title">管理助手</span>
     <button class="icon-btn" id="botedit-close" type="button" aria-label="关闭">✕</button>
   </div>
   <div class="sheet-body">
@@ -1694,7 +2689,7 @@
       <button class="btn" id="botedit-avatar" type="button">改头像</button>
     </div>
     <div class="danger-zone">
-      <button class="btn danger block" id="botedit-delete" type="button">删除这个 Bot</button>
+      <button class="btn danger block" id="botedit-delete" type="button">删除这个助手</button>
       <div class="row-note" id="botedit-delete-note">删除会一并删掉它的记忆和对话记录，无法恢复。</div>
     </div>
   </div>
@@ -1812,6 +2807,237 @@ const mqMobile = window.matchMedia('(max-width: 860px)');
 const isMobile = () => mqMobile.matches;
 
 /* ---------------------------------------------------------------------
+   appearance: dark / light / follow the system.
+   The head script already set data-theme before paint; this keeps the
+   controls, the meta colour and the system listener in sync.
+   --------------------------------------------------------------------- */
+const THEME_KEY = 'desk.theme';
+const THEME_LABELS = { dark: '深色', light: '浅色', system: '跟随系统' };
+const THEME_GLYPHS = { dark: '☾', light: '☀', system: '◐' };
+const mqLight = window.matchMedia('(prefers-color-scheme: light)');
+
+function themePref() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || saved === 'light' || saved === 'system') return saved;
+  } catch { /* private mode */ }
+  return 'system';
+}
+
+function resolvedTheme(pref) {
+  if (pref === 'dark' || pref === 'light') return pref;
+  return mqLight.matches ? 'light' : 'dark';
+}
+
+function applyTheme(pref, { persist = false } = {}) {
+  const next = THEME_LABELS[pref] ? pref : 'system';
+  const resolved = resolvedTheme(next);
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePref = next;
+  document.documentElement.style.colorScheme = resolved;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', resolved === 'light' ? '#f4f5f9' : '#08090d');
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
+    if (typeof reportUiState === 'function') reportUiState();
+  }
+  if ($('theme-btn-glyph')) $('theme-btn-glyph').textContent = THEME_GLYPHS[next];
+  if ($('theme-btn-label')) $('theme-btn-label').textContent = THEME_LABELS[next];
+  if ($('theme-btn')) $('theme-btn').title = `外观：${THEME_LABELS[next]}（点击切换）`;
+  document.querySelectorAll('[data-theme-choice]').forEach((node) => {
+    const on = node.dataset.themeChoice === next;
+    node.classList.toggle('active', on);
+    node.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+
+function cycleTheme() {
+  const order = ['dark', 'light', 'system'];
+  const next = order[(order.indexOf(themePref()) + 1) % order.length];
+  applyTheme(next, { persist: true });
+  toast(`外观：${THEME_LABELS[next]}`);
+}
+
+function initTheme() {
+  applyTheme(themePref());
+  mqLight.addEventListener?.('change', () => {
+    if (themePref() === 'system') applyTheme('system');
+  });
+  $('theme-btn')?.addEventListener('click', cycleTheme);
+  document.querySelectorAll('[data-theme-choice]').forEach((node) => {
+    node.addEventListener('click', () => applyTheme(node.dataset.themeChoice, { persist: true }));
+  });
+}
+
+/* ---------------------------------------------------------------------
+   timezone: the human can follow this device, follow the controlled
+   machine, or pick an IANA zone by hand. The effective zone is also pushed
+   to the server so routines and logs agree with what the UI shows.
+   --------------------------------------------------------------------- */
+const TZ_KEY = 'desk.timezone';
+const COMMON_TIMEZONES = [
+  'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Tokyo', 'Asia/Seoul',
+  'Asia/Singapore', 'Asia/Bangkok', 'Asia/Kolkata', 'Asia/Dubai',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'Australia/Sydney', 'Pacific/Auckland', 'UTC',
+];
+
+function localTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+function timezonePref() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TZ_KEY) || 'null');
+    if (raw && ['local', 'target', 'manual'].includes(raw.mode)) {
+      return { mode: raw.mode, value: String(raw.value || localTimezone()) };
+    }
+  } catch { /* private mode / old value */ }
+  return { mode: 'local', value: localTimezone() };
+}
+
+function effectiveTimezone() {
+  const pref = timezonePref();
+  if (pref.mode === 'manual') return pref.value || localTimezone();
+  if (pref.mode === 'target') {
+    const target = activeTarget();
+    if (target.id !== 'local' && target.timezone) return target.timezone;
+  }
+  return localTimezone();
+}
+
+function timezoneLabel(zone) {
+  if (!zone) return '—';
+  try {
+    const now = new Date();
+    const name = new Intl.DateTimeFormat('zh-CN', { timeZone: zone, timeZoneName: 'shortOffset' })
+      .formatToParts(now).find((p) => p.type === 'timeZoneName')?.value || '';
+    return name ? `${zone}（${name.replace('GMT', 'UTC')}）` : zone;
+  } catch {
+    return zone;
+  }
+}
+
+function renderTimezoneOptions() {
+  const select = $('tz-select');
+  if (!select) return;
+  const zones = new Set(COMMON_TIMEZONES);
+  try {
+    for (const zone of Intl.supportedValuesOf('timeZone')) zones.add(zone);
+  } catch { /* older engine: the common list is enough */ }
+  zones.add(effectiveTimezone());
+  const current = timezonePref().value;
+  select.innerHTML = [...zones].sort().map((zone) => (
+    `<option value="${escapeHtml(zone)}">${escapeHtml(timezoneLabel(zone))}</option>`
+  )).join('');
+  select.value = [...zones].includes(current) ? current : effectiveTimezone();
+}
+
+function syncTimezoneUi() {
+  const pref = timezonePref();
+  const zone = effectiveTimezone();
+  document.querySelectorAll('[data-tz-mode]').forEach((node) => {
+    const on = node.dataset.tzMode === pref.mode;
+    node.classList.toggle('active', on);
+    node.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  if ($('tz-select')) {
+    $('tz-select').hidden = pref.mode !== 'manual';
+    if (!$('tz-select').hidden) $('tz-select').value = pref.value;
+  }
+  if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(zone);
+  if ($('tz-note')) {
+    const target = activeTarget();
+    if (pref.mode === 'target' && target.id !== 'local' && !target.timezone) {
+      $('tz-note').textContent = `还认不出「${target.name}」的时区，先按这台设备的 ${localTimezone()} 走；可以点「编辑当前机器」手动填。`;
+    } else if (pref.mode === 'target' && target.id !== 'local') {
+      $('tz-note').textContent = `跟着「${target.name}」走：${zone}`;
+    } else if (pref.mode === 'target') {
+      $('tz-note').textContent = `现在接管的是本机，使用这台设备的 ${zone}。`;
+    } else {
+      $('tz-note').textContent = `当前时区：${zone}`;
+    }
+  }
+}
+
+let tzPushTimer = null;
+function pushTimezoneToServer(zone) {
+  clearTimeout(tzPushTimer);
+  tzPushTimer = setTimeout(async () => {
+    const current = (state.settings && state.settings.timezone) || (state.config && state.config.timezone);
+    if (current === zone) return;
+    try {
+      const saved = await api('/api/settings', { method: 'PUT', body: { timezone: zone } });
+      if (saved && saved.model && state.settings) state.settings.timezone = saved.timezone || zone;
+      if (state.config) state.config.timezone = zone;
+    } catch { /* the server may be an older build; the UI still shows the choice */ }
+  }, 250);
+}
+
+function applyTimezone({ persist = false, push = true } = {}) {
+  const pref = timezonePref();
+  if (persist) {
+    try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* private mode */ }
+  }
+  const zone = effectiveTimezone();
+  syncTimezoneUi();
+  if (push) pushTimezoneToServer(zone);
+  if (typeof reportUiState === 'function') reportUiState();
+  return zone;
+}
+
+function setTimezoneMode(mode) {
+  const pref = timezonePref();
+  if (!['local', 'target', 'manual'].includes(mode)) return;
+  pref.mode = mode;
+  if (mode === 'manual' && !pref.value) pref.value = effectiveTimezone();
+  try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
+  if (mode === 'target') probeActiveTargetTimezone();
+  applyTimezone({ push: true });
+}
+
+/** A remote Desk Hub can tell us its timezone without any agent on the box. */
+async function probeActiveTargetTimezone() {
+  const target = activeTarget();
+  if (target.id === 'local' || target.timezone || target.probing) return;
+  const targets = readTargets();
+  const row = targets.find((t) => t.id === target.id);
+  if (!row) return;
+  row.probing = true;
+  writeTargets(targets);
+  try {
+    const info = await api(`/api/remote/info?host=${encodeURIComponent(target.host)}`);
+    if (info && info.timezone) {
+      const next = readTargets().map((t) => (t.id === target.id ? { ...t, timezone: info.timezone, probing: false } : t));
+      writeTargets(next);
+      if (timezonePref().mode === 'target') applyTimezone({ push: true });
+      renderTargetPicker();
+      return;
+    }
+  } catch { /* older hub / auth / unreachable */ }
+  const next = readTargets().map((t) => (t.id === target.id ? { ...t, probing: false } : t));
+  writeTargets(next);
+  if (timezonePref().mode === 'target') syncTimezoneUi();
+}
+
+function initTimezone() {
+  renderTimezoneOptions();
+  document.querySelectorAll('[data-tz-mode]').forEach((node) => {
+    node.addEventListener('click', () => setTimezoneMode(node.dataset.tzMode));
+  });
+  $('tz-select')?.addEventListener('change', () => {
+    const pref = timezonePref();
+    pref.mode = 'manual';
+    pref.value = $('tz-select').value;
+    // applyTimezone() re-reads localStorage, so persist the new choice first.
+    try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
+    applyTimezone({ persist: true, push: true });
+  });
+  applyTimezone({ push: false });
+}
+
+/* ---------------------------------------------------------------------
    small helpers
    --------------------------------------------------------------------- */
 function el(tag, className, text) {
@@ -1819,6 +3045,41 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined && text !== null) node.textContent = String(text);
   return node;
+}
+
+const RISK_LABELS = { LOW: '低', MEDIUM: '中', HIGH: '高' };
+function riskLabel(risk) {
+  if (!risk) return '';
+  return RISK_LABELS[String(risk).toUpperCase()] || String(risk);
+}
+
+const DECISION_LABELS = {
+  approved: '已批准', approve: '已批准',
+  denied: '已拒绝', deny: '已拒绝',
+  auto: '自动通过', ask: '待批准', pending: '待批准',
+};
+function decisionLabel(decision) {
+  if (!decision) return '';
+  return DECISION_LABELS[String(decision).toLowerCase()] || String(decision);
+}
+
+/** The policy engine explains itself in English; these phrases are part of
+ *  the chrome, not model output, so they get a Chinese rendering. Unknown
+ *  reasons pass through untouched rather than being mangled. */
+function reasonLabel(reason) {
+  if (!reason) return '';
+  return String(reason)
+    .replace(/\blow-risk tool\b/g, '这是一个低风险操作')
+    .replace(/\bmedium-risk tool\b/g, '这是一个中风险操作')
+    .replace(/\bhigh-risk tool\b/g, '这是一个高风险操作')
+    .replace(/;\s*auto-approved \(autonomous mode\)/g, '；完全自主模式已自动通过')
+    .replace(/;\s*auto-approved by policy/g, '；按策略自动通过')
+    .replace(/(.+?) is not granted to this bot/g, '这个助手没有「$1」的执行权限')
+    .replace(/command matches danger denylist \((.*?)\)/g, '命令命中危险黑名单（$1）')
+    .replace(/path resolves outside the shared workspace \((.*?)\)/g, '要动的文件不在共享工作区里（$1）')
+    .replace(/\bapproval timed out\b/gi, '等太久没确认，已经自动取消')
+    .replace(/\bturn cancelled\b/gi, '这一轮被取消了')
+    .replace(/\bserver shutting down\b/gi, '服务先关掉了');
 }
 
 function fmtClock(ts) {
@@ -1833,14 +3094,14 @@ function fmtWhen(iso) {
   if (Number.isNaN(then)) return '—';
   const diff = then - Date.now();
   const abs = Math.abs(diff);
-  const units = [['d', 86400000], ['h', 3600000], ['m', 60000], ['s', 1000]];
+  const units = [['天', 86400000], ['小时', 3600000], ['分钟', 60000], ['秒', 1000]];
   for (const [label, ms] of units) {
     if (abs >= ms) {
       const n = Math.round(abs / ms);
-      return diff >= 0 ? `in ${n}${label}` : `${n}${label} ago`;
+      return diff >= 0 ? `${n}${label}后` : `${n}${label}前`;
     }
   }
-  return 'now';
+  return '刚刚';
 }
 
 function truncate(text, max) {
@@ -2040,12 +3301,17 @@ function renderChatAvatar(bot) {
   if (!host || !bot) return;
   const a = avatarOf(bot);
   host.className = `av av-s-${a.shape} chat-avatar`;
-  host.style.setProperty('--av-size', '40px');
+  host.style.setProperty('--av-size', '30px');
   host.style.setProperty('--av-color', a.color);
   host.innerHTML = '';
   appendAvatarContent(host, a);
   host.setAttribute('aria-label', `更换 ${bot.name} 的头像`);
   host.title = `更换 ${bot.name} 的头像`;
+}
+
+/** A space around Latin names reads better inside a Chinese sentence. */
+function padName(name) {
+  return /^[A-Za-z0-9]/.test(String(name || '')) ? ' ' : '';
 }
 
 /** Last-message preview for the sidebar row; role when there is nothing yet. */
@@ -2139,6 +3405,10 @@ function renderGroups() {
   list.innerHTML = '';
   $('group-count').textContent = String(state.groups.length);
   $('groups-hint').hidden = state.groupsSupported;
+  // Empty sections are noise. With no groups, the "+" menu is the only entry
+  // point the sidebar needs; the header comes back as soon as one exists.
+  const section = $('groups-section');
+  if (section) section.hidden = state.groups.length === 0 && state.groupsSupported;
 
   for (const group of state.groups) {
     const members = groupMembers(group);
@@ -2186,15 +3456,64 @@ function renderGroupHead(group) {
     : `${members.length} 位成员`;
   $('group-members-pill').hidden = false;
   $('group-members-pill').textContent = `${members.length} 位成员`;
-  $('bot-tools-pill').hidden = true;
+  if ($('group-delete-btn')) $('group-delete-btn').hidden = false;
 }
 
 function renderBotHead(bot) {
   $('chat-avatar').hidden = false;
   $('chat-stack').hidden = true;
   $('group-members-pill').hidden = true;
-  $('bot-tools-pill').hidden = false;
+  if ($('group-delete-btn')) $('group-delete-btn').hidden = true;
   if (bot) renderChatAvatar(bot);
+}
+
+/* ---------------------------------------------------------------------
+   destructive confirmation: one small modal, one promise
+   --------------------------------------------------------------------- */
+let confirmResolve = null;
+function askConfirm({ title = '确认删除', text = '', confirmLabel = '删除' } = {}) {
+  if (confirmResolve) confirmResolve(false);
+  $('confirm-title').textContent = title;
+  $('confirm-text').textContent = text;
+  $('confirm-ok').textContent = confirmLabel;
+  $('confirm-modal').classList.add('open');
+  $('confirm-modal').setAttribute('aria-hidden', 'false');
+  $('confirm-scrim').classList.add('show');
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+
+function settleConfirm(value) {
+  $('confirm-modal').classList.remove('open');
+  $('confirm-modal').setAttribute('aria-hidden', 'true');
+  $('confirm-scrim').classList.remove('show');
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if (resolve) resolve(value);
+}
+
+async function deleteCurrentGroup() {
+  const group = groupById(state.groupId);
+  if (!group) return;
+  const ok = await askConfirm({
+    title: '删除这个群组？',
+    text: `「${group.name}」的群聊记录会一起删掉，无法恢复。助手本身和它们的私聊都还在。`,
+    confirmLabel: '删除群组',
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
+    state.groupId = null;
+    state.groupMessages = [];
+    await loadGroups();
+    const primary = state.bots.find((b) => b.primary) || state.bots[0];
+    if (primary) await selectBot(primary.id);
+    renderMessages();
+    connectStream();
+    toast('群组已删除');
+  } catch (err) {
+    if (err.status === 401) return;
+    toast(err.status === 404 ? '服务端还没有删除群组的接口（404）' : `删除失败：${err.message}`, true);
+  }
 }
 
 async function openGroup(id) {
@@ -2258,7 +3577,7 @@ function groupSenderRow(sender, contentNode) {
   if (av) row.appendChild(av);
   else row.appendChild(el('span', 'av g-empty'));
   const block = el('div', 'g-block');
-  block.appendChild(el('div', 'g-name', (sender && sender.name) || 'Bot'));
+  block.appendChild(el('div', 'g-name', (sender && sender.name) || '助手'));
   if (contentNode) block.appendChild(contentNode);
   row.appendChild(block);
   return row;
@@ -2464,7 +3783,7 @@ function openBotEdit(botId, options = {}) {
   closeSidebar();
   state.botEditingId = botId;
   state.deleteArmed = Boolean(options.armDelete) && !bot.primary;
-  $('botedit-title').textContent = `管理 Bot · ${bot.name}`;
+  $('botedit-title').textContent = `管理助手 · ${bot.name}`;
   $('botedit-name-input').value = bot.name || '';
   $('botedit-role-input').value = bot.role || '';
   $('botedit-note').hidden = true;
@@ -2476,9 +3795,9 @@ function openBotEdit(botId, options = {}) {
 
   const del = $('botedit-delete');
   del.disabled = Boolean(bot.primary);
-  del.textContent = state.deleteArmed ? `再点一次确认删除「${bot.name}」` : '删除这个 Bot';
+  del.textContent = state.deleteArmed ? `再点一次确认删除「${bot.name}」` : '删除这个助手';
   $('botedit-delete-note').textContent = bot.primary
-    ? '主 Bot 不能删除；先把另一个 Bot 设为主要再删这个。'
+    ? '主助手不能删除；先把另一个助手设为主要再删这个。'
     : '删除会一并删掉它的记忆和对话记录，无法恢复。';
 
   $('botedit-sheet').classList.add('open');
@@ -2515,10 +3834,10 @@ async function saveBotEdit() {
     renderGroups();
     if (state.botId === bot.id && !isGroupMode()) {
       $('chat-title').textContent = name;
-      $('chat-sub').textContent = role || 'no role set';
+      $('chat-sub').textContent = role || '还没有设定职责';
       renderChatAvatar(state.bots[index] || bot);
     }
-    $('botedit-title').textContent = `管理 Bot · ${name}`;
+    $('botedit-title').textContent = `管理助手 · ${name}`;
     setBotEditNote('');
     toast('已保存');
   } catch (err) {
@@ -2533,7 +3852,7 @@ async function saveBotEdit() {
 async function deleteBotFlow() {
   const bot = botById(state.botEditingId);
   if (!bot) return;
-  if (bot.primary) { setBotEditNote('主 Bot 不能删除。'); return; }
+  if (bot.primary) { setBotEditNote('主助手不能删除。'); return; }
   const button = $('botedit-delete');
   if (!state.deleteArmed) {
     state.deleteArmed = true;
@@ -2555,7 +3874,7 @@ async function deleteBotFlow() {
   } catch (err) {
     state.deleteArmed = false;
     button.disabled = false;
-    button.textContent = '删除这个 Bot';
+    button.textContent = '删除这个助手';
     setBotEditNote(`删除失败：${err.message}`);
   }
 }
@@ -2589,6 +3908,13 @@ function updateNewMenu() {
   if (!item) return;
   item.disabled = !state.groupsSupported;
   item.title = state.groupsSupported ? '' : '服务端还没有群组接口（404）';
+}
+
+function hideToast() {
+  const node = $('toast');
+  if (!node) return;
+  clearTimeout(toast._t);
+  node.className = 'toast';
 }
 
 function toast(text, isError = false) {
@@ -2791,7 +4117,11 @@ async function connectDevice() {
    boot
    --------------------------------------------------------------------- */
 async function boot() {
+  initTheme();
   wireChrome();
+  ensureTargets();
+  initTimezone();
+  renderTargetPicker();
   applyLayoutPrefs();
   startScreenLoop();
   registerServiceWorker();
@@ -2841,9 +4171,14 @@ async function boot() {
   else renderMessages();
 
   await Promise.allSettled([loadSkills(), loadRoutines(), loadActivity()]);
+  state.ready = true;
   connectStream();
   pollHealth();
   setInterval(pollHealth, 15000);
+  // Keep the server's copy fresh enough for the primary bot to answer
+  // "现在是什么主题 / 在控制哪台机器" without a round trip to the browser.
+  reportUiState();
+  setInterval(reportUiState, 30000);
 }
 
 function showFatal(err) {
@@ -2861,9 +4196,7 @@ function showFatal(err) {
 function applyShellConfig() {
   const cfg = state.config || {};
   $('assistant-name').textContent = cfg.name || 'Desk';
-  $('timezone-pill').textContent = cfg.timezone || '—';
-  $('workspace-foot').textContent = cfg.workspace ? `workspace · ${cfg.workspace}` : 'workspace —';
-  $('workspace-foot').title = cfg.workspace || '';
+  if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
   updateModelUi();
 }
 
@@ -2891,9 +4224,9 @@ function updateModelUi() {
   const info = modelState();
   state.unconfigured = info.unconfigured;
 
-  const label = info.provider === 'mock' ? 'mock · 演示' : `${info.provider} · ${info.model}`;
+  const label = info.provider === 'mock' ? '演示模式' : (info.model !== '—' ? info.model : info.provider);
   $('model-label').textContent = label.slice(0, 44);
-  $('model-pill').title = `provider: ${info.provider} / model: ${info.model} / key: ${info.hasKey ? 'saved' : 'missing'}`;
+  $('model-pill').title = `服务商：${info.provider} · 模型：${info.model} · 密钥：${info.hasKey ? '已保存' : '未设置'}`;
   $('model-pill').classList.toggle('warn', info.unconfigured);
 
   updateComposerMode();
@@ -2905,7 +4238,7 @@ function updateModelUi() {
   $('about-version').textContent = app.version || (state.config && state.config.version) || '—';
   const server = st.server || {};
   $('about-server').textContent = `${server.host || location.hostname}${server.port ? ':' + server.port : (location.port ? ':' + location.port : '')}`;
-  $('about-origin').textContent = location.origin;
+  syncTargetBranding();
   const authRequired = state.auth ? Boolean(state.auth.required) : Boolean(server.requireAuth);
   $('about-auth').textContent = authRequired ? '需要配对（本机除外）' : '仅本机，无需配对';
 }
@@ -2916,18 +4249,20 @@ function updateComposerMode() {
   input.disabled = blocked;
   $('send-btn').disabled = blocked || state.sending;
   if (blocked) {
-    input.placeholder = '先在设置里配置一个模型…';
+    input.placeholder = '先接入一个模型…';
   } else if (isGroupMode()) {
     const group = groupById(state.groupId);
     const coordinator = groupCoordinator(group);
     input.placeholder = `发到「${group ? group.name : '群组'}」${coordinator ? ` · 协调者 ${coordinator.name}` : ''}…`;
   } else {
-    input.placeholder = `Ask ${$('chat-title').textContent || 'your bot'} to do something…`;
+    const title = $('chat-title').textContent || '你的助手';
+    const pad = padName(title);
+    input.placeholder = `给${pad}${title}${pad}发消息…`;
   }
   $('mock-banner').hidden = !(state.unconfigured && !blocked);
   $('composer-hint').textContent = blocked
-    ? '还没配置模型 · 点右上角 ⚙ 配置，或先选择「试用 mock」'
-    : 'Enter 发送 · Shift+Enter 换行 · HIGH 风险操作总会先等你批准';
+    ? '还没接入模型 · 去左下角「设置」看看'
+    : '需要动你电脑的操作，会先问过你';
 }
 
 function refreshMockState() {
@@ -2944,7 +4279,7 @@ async function pollHealth() {
     $('health-dot').className = `dot ${state.health.ok ? 'ok' : 'bad'}`;
     const m = state.health.model || {};
     if ((state.settings && state.settings.model && state.settings.model.provider) === undefined) {
-      $('model-label').textContent = `${m.provider} · ${m.model}`.slice(0, 44);
+      $('model-label').textContent = m.provider === 'mock' ? '演示模式' : `${m.model || m.provider}`.slice(0, 44);
     }
   } catch (err) {
     $('health-dot').className = 'dot bad';
@@ -2970,7 +4305,7 @@ async function refreshRoster() {
       const next = bots.find((b) => b.primary) || bots[0];
       if (next) {
         await selectBot(next.id);
-        toast('当前 Bot 已被删除，已切回 ' + next.name);
+        toast('当前助手已被删除，已切回 ' + next.name);
       }
     } else if (before !== bots.map((b) => b.id).join(',')) {
       renderBots();
@@ -2995,7 +4330,7 @@ function renderBots() {
     row.tabIndex = 0;
     row.setAttribute('aria-pressed', active ? 'true' : 'false');
 
-    const av = avatarNode(bot, 52, 'bot-av');
+    const av = avatarNode(bot, 38, 'bot-av');
     av.setAttribute('role', 'img');
     av.setAttribute('aria-label', `${bot.name} 的头像，点按自定义`);
     av.title = '自定义头像';
@@ -3007,7 +4342,7 @@ function renderBots() {
     const text = el('div', 'bot-text');
     const nameRow = el('div', 'bot-name');
     nameRow.appendChild(el('span', 'bot-name-text', bot.name));
-    if (bot.primary) nameRow.appendChild(el('span', 'badge', 'primary'));
+    if (bot.primary) nameRow.appendChild(el('span', 'badge', '主'));
     text.appendChild(nameRow);
     text.appendChild(el('div', 'bot-preview', previewText(bot)));
 
@@ -3036,7 +4371,7 @@ function renderBots() {
     menu.appendChild(el('div', 'menu-sep'));
     const delItem = mkItem('删除', () => openBotEdit(bot.id, { armDelete: true }), 'danger');
     delItem.disabled = Boolean(bot.primary);
-    delItem.title = bot.primary ? '主 Bot 不能删除' : '';
+    delItem.title = bot.primary ? '主助手不能删除' : '';
     menu.appendChild(delItem);
     more.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -3078,10 +4413,8 @@ async function selectBot(id) {
 
   renderBotHead(bot);
   $('chat-title').textContent = bot.name;
-  $('chat-sub').textContent = bot.role || 'no role set';
-  $('bot-tools-pill').textContent = `${(bot.tools || []).length} tools`;
-  $('bot-tools-pill').title = (bot.tools || []).join(', ');
-  $('bot-memory-title').textContent = `${bot.name}'s memory`;
+  $('chat-sub').textContent = bot.role || '还没有设定职责';
+  $('bot-memory-title').textContent = `${bot.name} 的记忆`;
   state.liveTurn = null;
   updateComposerMode();
   connectStream();
@@ -3182,74 +4515,78 @@ function emptyState() {
   return welcomeCard();
 }
 
+/* One row of an A/B choice card. Same shape in the empty state and in
+   approvals, so the whole product teaches a single interaction. */
+function choiceButton(key, title, desc, onPick) {
+  const btn = el('button', 'choice');
+  btn.type = 'button';
+  btn.appendChild(el('span', 'choice-key', key));
+  const body = el('span', 'choice-body');
+  body.appendChild(el('span', 'choice-title', title));
+  if (desc) body.appendChild(el('span', 'choice-desc', desc));
+  btn.appendChild(body);
+  btn.appendChild(el('span', 'choice-go', '›'));
+  btn.addEventListener('click', onPick);
+  return btn;
+}
+
 function onboardingCard() {
   const wrap = el('div', 'empty');
+  wrap.appendChild(el('div', 'empty-mark', 'D'));
+  wrap.appendChild(el('h2', null, '先接入一个模型'));
+  wrap.appendChild(el('p', null, '现在用的是内置演示，回答由脚本生成，不会真的理解你的话。接入模型后它才开始正经干活。'));
 
-  const card = el('div', 'onboard');
-  const head = el('div', 'onboard-head');
-  head.appendChild(el('div', 'onboard-mark', '⚙'));
-  head.appendChild(el('h2', null, '还没配置模型'));
-  card.appendChild(head);
-
-  card.appendChild(el('p', null,
-    'Desk 现在用内置的 mock 回答——那是一段脚本化的演示，不会真的理解你的话。'));
-  card.appendChild(el('p', null,
-    '在设置里填上 provider、Base URL、模型名和 API Key，就能拿到真实回答。'));
-
-  const actions = el('div', 'onboard-actions');
-  const open = el('button', 'btn primary', '打开设置');
-  open.type = 'button';
-  open.addEventListener('click', openSettings);
-  const demo = el('button', 'btn ghost', '先用 mock 试试');
-  demo.type = 'button';
-  demo.addEventListener('click', () => {
+  const choices = el('div', 'choice-list');
+  choices.appendChild(choiceButton('A', '接入真实模型', '填入接口地址、模型名和密钥，大约一分钟', () => openSettings('sec-model')));
+  choices.appendChild(choiceButton('B', '先用演示模式看看', '不填任何东西，先熟悉界面和审批流程', () => {
     state.mockAck = true;
     try { sessionStorage.setItem('desk.mockAck', '1'); } catch { /* private mode */ }
     refreshMockState();
-  });
-  actions.appendChild(open);
-  actions.appendChild(demo);
-  card.appendChild(actions);
-
-  wrap.appendChild(card);
+  }));
+  wrap.appendChild(choices);
+  wrap.appendChild(el('div', 'empty-foot', '之后随时可以在左下角「设置」里更换。'));
   return wrap;
 }
 
 function welcomeCard() {
   const wrap = el('div', 'empty');
-  wrap.appendChild(el('h2', null, 'One desk, three teammates.'));
-  wrap.appendChild(el('p', null,
-    'They share this workspace, keep their own memory, and stop for your approval before anything irreversible.'));
+  const bot = botById(state.botId);
+  const name = bot ? bot.name : ($('chat-title').textContent || '助手');
+  const pad = padName(name);
+  const intro = bot && !bot.primary && bot.role
+    ? `我是${pad}${name}，${bot.role}`
+    : `我是${pad}${name}，负责协调这台电脑上的助手`;
+  wrap.appendChild(el('div', 'empty-mark', 'D'));
+  wrap.appendChild(el('h2', null, '今天想让我做什么？'));
+  wrap.appendChild(el('p', null, `${intro}。要动文件或系统的操作，我会先问过你。`));
 
-  const suggestions = el('div', 'suggestions');
   const examples = [
-    'List the files in the workspace and write a note',
-    'Remember that I prefer metric units',
-    'Write a note outside the workspace',
-    'Hand off to the researcher: summarise welcome.md',
-    'Save this as a skill called inbox-triage',
+    ['A', '看看工作区', '列出文件，按类型整理一份清单', '看看工作区里有哪些文件，按类型整理一份清单，写清楚每个文件是做什么的。'],
+    ['B', '写一份笔记', '在工作区新建一个 markdown 文件', '在工作区里新建一份笔记，标题是「今天的想法」，先写上三条占位内容。'],
+    ['C', '记住我的习惯', '比如默认用公制单位', '记住：我习惯用公制单位，温度用摄氏度，距离用公里。'],
+    ['D', '交给研究员', '让同事总结一份文档', '交给研究员：总结一下工作区里的 welcome.md，用三句话说明要点。'],
   ];
-  for (const text of examples) {
-    const b = el('button', 'suggestion', text);
-    b.type = 'button';
-    b.addEventListener('click', () => {
-      $('composer').value = text;
-      autoGrow($('composer'));
-      $('composer').focus();
-    });
-    suggestions.appendChild(b);
+  const choices = el('div', 'choice-list');
+  for (const [key, title, desc, prompt] of examples) {
+    choices.appendChild(choiceButton(key, title, desc, () => {
+      const composer = $('composer');
+      composer.value = prompt;
+      autoGrow(composer);
+      composer.focus();
+    }));
   }
-  wrap.appendChild(suggestions);
+  wrap.appendChild(choices);
+  wrap.appendChild(el('div', 'empty-foot', '也可以直接输入，Enter 发送。'));
   return wrap;
 }
 
 function statusLine(item) {
   const map = {
-    needs_approval: ['warn', 'Paused - waiting for approval'],
-    failed: ['bad', 'Run failed'],
-    timeout: ['warn', 'Ran out of time'],
-    cancelled: ['bad', 'Cancelled'],
-    max_steps: ['warn', 'Stopped at the step limit'],
+    needs_approval: ['warn', '已暂停 · 等你批准'],
+    failed: ['bad', '运行失败'],
+    timeout: ['warn', '超时了'],
+    cancelled: ['bad', '已取消'],
+    max_steps: ['warn', '到达步数上限，先停下了'],
   };
   const [kind, label] = map[item.status] || ['warn', item.status];
   const line = el('div', 'status-line');
@@ -3431,42 +4768,243 @@ function longBlock(label, text, { clampAt = 600, labelIsRaw = false } = {}) {
   return wrap;
 }
 
+/* Plain-language naming for tool calls. The transcript is read by a person,
+   not by the model: no `routine_create · 已拒绝` blocks. Unknown names fall
+   back to the raw id so a newly added tool is never invisible. */
+const TOOL_TEXT = {
+  shell: { label: '执行命令', title: '想在这台电脑上运行一条命令', impact: '命令会以你当前的用户身份运行，可能出现你没预料到的改动。' },
+  fs_write: { label: '写入文件', title: '想写入一个文件', impact: '如果同名文件已经存在，里面的内容会被覆盖。' },
+  fs_delete: { label: '删除文件', title: '想删除一个文件或文件夹', impact: '删掉之后，Desk 里没有撤销按钮。' },
+  fs_mkdir: { label: '新建文件夹', title: '想新建一个文件夹', impact: '只会在工作区里加一个目录，不改动已有文件。' },
+  fs_read: { label: '读取文件', title: '想读取一个文件', impact: '只会读取内容，不会改动它。' },
+  fs_list: { label: '查看目录', title: '想看看目录里有什么', impact: '只会读取文件名，不会改动任何东西。' },
+  routine_create: { label: '创建定时任务', title: '想创建一个会自己重复跑的任务', impact: '创建后会按计划一直自动运行，直到你把它停掉。' },
+  routine_run: { label: '运行定时任务', title: '想立刻运行一个定时任务', impact: '它会马上在后台跑一轮，结果记进历史。' },
+  routine_list: { label: '查看定时任务', title: '想看看有哪些定时任务', impact: '只读取列表，不会改动。' },
+  memory_write: { label: '记住一件事', title: '想记住一条信息', impact: '会写进长期记忆，以后的对话都会带上它。' },
+  memory_read: { label: '读取记忆', title: '想看看记住了什么', impact: '只读取，不会改动。' },
+  http_fetch: { label: '访问网址', title: '想访问一个网址', impact: '会向这个地址发出请求，对方能看到请求来源。' },
+  browser_open: { label: '打开网页', title: '想打开一个网页', impact: '只是打开，不会提交任何表单。' },
+  browser_click: { label: '点击网页', title: '想点击网页上的一个位置', impact: '可能触发页面上的操作，例如提交或下载。' },
+  browser_type: { label: '填写网页', title: '想在网页里输入文字', impact: '会填进当前页面获得焦点的输入框。' },
+  browser_eval: { label: '运行网页脚本', title: '想在网页里运行一段脚本', impact: '脚本能读取或改动当前页面的内容。' },
+  browser_download: { label: '下载文件', title: '想下载一个文件', impact: '文件会保存到这台电脑上。' },
+  browser_screenshot: { label: '网页截图', title: '想给网页截一张图', impact: '只读取当前页面，不会改动。' },
+  browser_snapshot: { label: '读取网页', title: '想读取网页上的内容', impact: '只读取页面结构，不会改动。' },
+  browser_status: { label: '查看浏览器', title: '想看看浏览器是否打开着', impact: '只读取状态。' },
+  browser_close: { label: '关闭浏览器', title: '想关上浏览器', impact: '会关闭当前打开的浏览器窗口。' },
+  bot_message: { label: '转交给同事', title: '想把任务交给另一位助手', impact: '对方会用自己的工具和记忆独立完成，再回来汇报。' },
+  bot_create: { label: '新建助手', title: '想新建一个助手', impact: '列表里会多一个成员，拥有你授予的工具。' },
+  bot_update: { label: '修改助手', title: '想改一个助手的设置', impact: '会改名字、职责或它可用的工具。' },
+  bot_delete: { label: '删除助手', title: '想删除一个助手', impact: '它的对话记录和群里的位置会一起消失，无法恢复。' },
+  bot_list: { label: '查看助手', title: '想看看有哪些助手', impact: '只读取名单。' },
+  group_create: { label: '新建群组', title: '想新建一个群组', impact: '会把几位助手拉进同一个对话。' },
+  group_post: { label: '在群里发言', title: '想在群里发一条消息', impact: '群里所有成员都会看到。' },
+  skill_save: { label: '保存技能', title: '想把这套做法保存成技能', impact: '会写进共享技能库，之后可以重复使用。' },
+  skill_list: { label: '查看技能', title: '想看看有哪些技能', impact: '只读取列表。' },
+  skill_read: { label: '读取技能', title: '想读一个技能的步骤', impact: '只读取内容。' },
+  task_finish: { label: '结束任务', title: '想结束这一轮', impact: '它会停下来，把结果交给你。' },
+};
+
+function toolNameLabel(name) {
+  return (TOOL_TEXT[name] && TOOL_TEXT[name].label) || name || '操作';
+}
+
+function safeArgs(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    const parsed = safeParse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  }
+  return typeof raw === 'object' ? raw : {};
+}
+
+function humanSchedule(schedule) {
+  const s = String(schedule || '').trim();
+  if (!s) return '';
+  const every = /^every\s+(\d+)\s*(minutes?|hours?|seconds?|days?)$/i.exec(s);
+  if (every) {
+    const unit = /^m/i.test(every[2]) ? '分钟' : /^h/i.test(every[2]) ? '小时' : /^s/i.test(every[2]) ? '秒' : '天';
+    return `每 ${Number(every[1])} ${unit}`;
+  }
+  const parts = s.split(/\s+/);
+  if (parts.length === 5) {
+    const [min, hour, dom, mon, dow] = parts;
+    const hhmm = /^\d+$/.test(min) && /^\d+$/.test(hour)
+      ? `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}` : '';
+    if (hhmm && dom === '*' && mon === '*') {
+      if (dow === '*') return `每天 ${hhmm}`;
+      if (dow === '1-5') return `工作日 ${hhmm}`;
+      const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      if (/^\d$/.test(dow)) return `每${names[Number(dow)]} ${hhmm}`;
+    }
+    if (/^\*\/\d+$/.test(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+      return `每 ${min.slice(2)} 分钟`;
+    }
+    return `按计划运行（${s}）`;
+  }
+  return s;
+}
+
+function describeTool(name, rawArgs) {
+  const args = safeArgs(rawArgs);
+  const base = TOOL_TEXT[name] || { label: name || '操作', title: `想使用「${name || '工具'}」`, impact: '' };
+  const out = { label: base.label, title: base.title, impact: base.impact, detail: '', facts: [] };
+  const set = (key, label, value) => {
+    if (value === undefined || value === null || value === '') return;
+    out.facts.push([label, String(value)]);
+  };
+
+  switch (name) {
+    case 'shell':
+      out.detail = String(args.command || '').trim();
+      set('命令', '命令', out.detail);
+      break;
+    case 'fs_write': {
+      const bytes = typeof args.content === 'string' ? args.content.length : 0;
+      out.detail = args.path || '';
+      if (args.mode === 'append') out.impact = '内容会追加到文件末尾，不会覆盖原有内容。';
+      set('文件', '文件', args.path);
+      if (bytes) set('大小', '写入大小', `${bytes} 个字符`);
+      break;
+    }
+    case 'fs_delete':
+      out.detail = args.path || '';
+      set('文件', '文件', args.path);
+      if (args.recursive) out.impact = '会连同文件夹里的所有东西一起删除，删掉之后没有撤销。';
+      break;
+    case 'fs_mkdir':
+    case 'fs_read':
+    case 'fs_list':
+      out.detail = args.path || '';
+      set('位置', '位置', args.path);
+      break;
+    case 'http_fetch':
+      out.detail = args.url || '';
+      set('地址', '网址', args.url);
+      set('方法', '方式', (args.method || 'GET').toUpperCase());
+      break;
+    case 'browser_open':
+    case 'browser_download':
+      out.detail = args.url || '';
+      set('地址', '网址', args.url);
+      break;
+    case 'browser_click':
+      out.detail = args.selector || args.ref || args.text || '';
+      set('目标', '目标', out.detail);
+      break;
+    case 'browser_type':
+      out.detail = args.text ? `输入「${truncate(args.text, 60)}」` : '';
+      set('内容', '输入内容', args.text ? truncate(args.text, 160) : '');
+      break;
+    case 'browser_eval':
+      out.detail = args.script || args.code || '';
+      break;
+    case 'routine_create': {
+      const when = humanSchedule(args.schedule);
+      out.detail = when;
+      out.title = '想创建一个会自己重复跑的任务';
+      set('做什么', '每次做什么', truncate(args.instruction || '', 160));
+      if (args.name) set('名字', '任务名', args.name);
+      break;
+    }
+    case 'routine_run':
+      out.detail = args.id || '';
+      set('任务', '任务编号', args.id);
+      break;
+    case 'memory_write':
+      out.detail = truncate(args.text || '', 72);
+      set('记住', '要记住的内容', truncate(args.text || '', 240));
+      out.impact = args.scope === 'shared'
+        ? '会写进所有助手共用的记忆。'
+        : '只会写进这位助手自己的记忆，以后的对话都会带上它。';
+      break;
+    case 'bot_message': {
+      const target = botById(args.botId);
+      out.detail = target ? target.name : (args.botId || '');
+      out.title = `想把任务交给${target ? `「${target.name}」` : '另一位助手'}`;
+      set('交给', '交给', target ? target.name : args.botId);
+      set('任务', '要它做什么', truncate(args.text || '', 200));
+      break;
+    }
+    case 'bot_create':
+    case 'bot_update':
+    case 'bot_delete':
+      out.detail = args.name || args.id || '';
+      set('助手', '助手', args.name || args.id);
+      if (Array.isArray(args.tools) && args.tools.length) {
+        set('工具', '可用的工具', args.tools.map(toolNameLabel).join('、'));
+      }
+      break;
+    case 'group_create':
+      out.detail = args.name || '';
+      set('群名', '群名', args.name);
+      if (Array.isArray(args.members)) set('成员', '成员', `${args.members.length} 位`);
+      break;
+    case 'group_post':
+      out.detail = truncate(args.text || '', 72);
+      set('内容', '要发的内容', truncate(args.text || '', 200));
+      break;
+    case 'skill_save':
+      out.detail = args.name || '';
+      set('技能', '技能名', args.name);
+      break;
+    default:
+      break;
+  }
+  return out;
+}
+
 function toolChip(item) {
+  const info = describeTool(item.name, item.args);
   const details = el('details', 'chip');
   const summary = el('summary');
 
+  const state = item.pending ? 'pending' : item.ok ? 'ok' : 'fail';
   const icon = item.pending ? '⋯' : item.ok ? '✓' : '✕';
-  const iconClass = item.pending ? 'pending' : item.ok ? 'ok' : 'fail';
-  summary.appendChild(el('span', `chip-icon ${iconClass}`, icon));
-  summary.appendChild(el('span', 'chip-name', item.name || 'tool'));
+  summary.appendChild(el('span', `chip-icon ${state}`, icon));
 
-  if (item.risk) summary.appendChild(el('span', `risk ${item.risk}`, item.risk));
-  if (item.needsApproval) summary.appendChild(el('span', 'tag warn', 'needs approval'));
-  else if (item.denied) summary.appendChild(el('span', 'tag bad', 'denied'));
+  const text = el('span', 'chip-text');
+  text.appendChild(el('span', 'chip-name', info.label));
+  if (info.detail) text.appendChild(el('span', 'chip-detail', truncate(info.detail, 64)));
+  summary.appendChild(text);
 
-  summary.appendChild(el('span', 'chip-time', fmtClock(item.ts)));
+  if (item.pending) summary.appendChild(el('span', 'chip-state', '进行中'));
+  else if (item.denied) summary.appendChild(el('span', 'chip-state bad', '已拒绝'));
+  else if (item.needsApproval) summary.appendChild(el('span', 'chip-state warn', '等你确认'));
+  else if (item.ok) summary.appendChild(el('span', 'chip-state', '完成'));
+  else summary.appendChild(el('span', 'chip-state bad', '没成功'));
 
-  // Group transcripts only carry the tool name — don't offer "展开" for nothing.
-  const args = item.args && typeof item.args === 'object' ? item.args : {};
-  const hasArgs = Object.keys(args).length > 0;
+  const args = safeArgs(item.args);
   const hasOutput = item.output !== undefined && item.output !== null && item.output !== '';
-  const hasBody = Boolean(item.reason) || hasArgs || hasOutput;
+  const hasBody = Boolean(item.reason || info.facts.length || hasOutput);
   if (hasBody) {
     const more = el('span', 'chip-more');
-    more.appendChild(el('span', 'when-closed', '展开'));
+    more.appendChild(el('span', 'when-closed', '详情'));
     more.appendChild(el('span', 'when-open', '收起'));
     summary.appendChild(more);
   }
   details.appendChild(summary);
-
   if (!hasBody) return details;
 
   const body = el('div', 'body');
-  if (item.reason) body.appendChild(el('div', 'muted tiny', item.reason));
-  if (hasArgs) body.appendChild(longBlock('args', JSON.stringify(args, null, 2)));
-  if (hasOutput) {
-    const outText = typeof item.output === 'string' ? item.output : JSON.stringify(item.output, null, 2);
-    body.appendChild(longBlock('result', outText));
+  if (info.impact) body.appendChild(el('div', 'chip-impact', info.impact));
+  if (item.reason) body.appendChild(el('div', 'muted tiny', reasonLabel(item.reason)));
+  for (const [label, value] of info.facts) {
+    const line = el('div', 'chip-fact');
+    line.appendChild(el('span', 'chip-fact-k', label));
+    line.appendChild(el('span', 'chip-fact-v', value));
+    body.appendChild(line);
+  }
+
+  const raw = {};
+  if (Object.keys(args).length) raw['参数'] = args;
+  if (hasOutput) raw['结果'] = item.output;
+  if (Object.keys(raw).length) {
+    const tech = el('details', 'tech');
+    tech.appendChild(el('summary', null, '技术细节'));
+    tech.appendChild(el('pre', 'tech-pre', JSON.stringify(raw, null, 2)));
+    body.appendChild(tech);
   }
   details.appendChild(body);
   return details;
@@ -3548,9 +5086,127 @@ function connectStream() {
   };
 }
 
+/* ---------------------------------------------------------------------
+   UI state reported to the server, and commands coming back from the
+   primary bot. The browser owns the real state (localStorage); the server's
+   copy exists so "总管，把主题换成浅色" has something to read and a channel
+   to answer on.
+   --------------------------------------------------------------------- */
+let uiReportTimer = null;
+function reportUiState() {
+  clearTimeout(uiReportTimer);
+  uiReportTimer = setTimeout(() => {
+    if (!state.ready) return;
+    const target = activeTarget();
+    const pref = timezonePref();
+    api('/api/ui/state', {
+      method: 'POST',
+      body: {
+        patch: {
+          theme: themePref(),
+          timezoneMode: pref.mode,
+          timezone: effectiveTimezone(),
+          target: {
+            id: target.id,
+            name: target.name,
+            host: target.host,
+            port: target.port,
+            timezone: target.timezone || '',
+          },
+          panelOpen: Boolean(state.panelOpen),
+          tab: state.tab || 'chat',
+        },
+      },
+    }).catch(() => { /* an older server does not have this route */ });
+  }, 300);
+}
+
+function applyUiCommand(patch = {}) {
+  let touched = false;
+
+  if (patch.theme && THEME_LABELS[patch.theme]) {
+    applyTheme(patch.theme, { persist: true });
+    touched = true;
+  }
+
+  if (patch.timezoneMode || patch.timezone) {
+    const pref = timezonePref();
+    if (patch.timezoneMode) pref.mode = patch.timezoneMode;
+    if (patch.timezone) {
+      pref.value = patch.timezone;
+      if (!patch.timezoneMode) pref.mode = 'manual';
+    }
+    try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
+    applyTimezone({ push: true });
+    touched = true;
+  }
+
+  if (patch.target && patch.target.host) {
+    const targets = readTargets();
+    const wantedPort = Number(patch.target.port) || 6080;
+    let row = patch.target.id
+      ? targets.find((t) => t.id === patch.target.id)
+      : targets.find((t) => t.host === patch.target.host && Number(t.port || 6080) === wantedPort);
+    if (!row) {
+      row = {
+        id: `machine-${Date.now().toString(36)}`,
+        name: patch.target.name || patch.target.host,
+        host: patch.target.host,
+        port: wantedPort,
+        password: patch.target.password || '',
+        timezone: patch.target.timezone || '',
+      };
+      targets.push(row);
+    } else {
+      row.name = patch.target.name || row.name;
+      row.host = patch.target.host;
+      row.port = wantedPort;
+      if (patch.target.password !== undefined) row.password = patch.target.password;
+      if (patch.target.timezone !== undefined) row.timezone = patch.target.timezone;
+    }
+    writeTargets(targets);
+    try { localStorage.setItem(VNC_ACTIVE_KEY, row.id); } catch { /* ignore */ }
+    if (document.body.classList.contains('panel-max')) togglePanelMax(false);
+    if (desktopTakeover()) closeDesktopViewer();
+    renderTargetPicker();
+    touched = true;
+  }
+
+  if (patch.tab) {
+    if (!state.panelOpen) {
+      state.panelOpen = true;
+      applyLayoutPrefs();
+    }
+    switchTab(patch.tab);
+    touched = true;
+  }
+  if (patch.panelOpen !== undefined) {
+    state.panelOpen = Boolean(patch.panelOpen);
+    applyLayoutPrefs();
+    if (state.panelOpen) openPanel();
+    else closePanel();
+    touched = true;
+  }
+
+  if (touched) {
+    toast('总管已调整界面');
+    reportUiState();
+  }
+}
+
 function handleEvent(ev) {
   // Roster edits are global and belong to no single chat: handle them before
   // the per-bot filter below, and keep them out of the Activity feed.
+  if (ev.type === 'ui.command') {
+    applyUiCommand(ev.patch || {});
+    return;
+  }
+  if (ev.type === 'settings.changed') {
+    if (state.settings && ev.settings) state.settings.model = ev.settings;
+    updateModelUi();
+    if ($('settings-drawer')?.classList.contains('open')) renderSettingsForm();
+    return;
+  }
   if (ev.type === 'roster.changed') {
     refreshRoster();
     return;
@@ -3593,7 +5249,7 @@ function handleEvent(ev) {
       if (chip) {
         chip.replaceWith(toolChip({
           name: ev.name, args: ev.args || {}, risk: ev.risk, ts: ev.ts,
-          ok: ev.ok, output: ev.result, reason: ev.denied ? 'denied by the human' : null,
+          ok: ev.ok, output: ev.result, reason: ev.denied ? '你拒绝了这次操作' : null,
         }));
       } else {
         appendLiveChip({ name: ev.name, risk: ev.risk, ts: ev.ts, ok: ev.ok, output: ev.result, botId: ev.botId });
@@ -3614,7 +5270,7 @@ function handleEvent(ev) {
     case 'approval.request':
       appendApprovalCard(ev, sender);
       refreshPendingApprovals();
-      toast('有一个操作在等你批准', true);
+      toast('有一个操作在等你批准');
       break;
 
     case 'approval.resolved':
@@ -3627,7 +5283,7 @@ function handleEvent(ev) {
       break;
 
     case 'error':
-      toast(ev.message || 'turn failed', true);
+      toast(ev.message || '这一轮运行失败了', true);
       break;
 
     default:
@@ -3660,7 +5316,7 @@ function appendLiveChip(chip) {
   // the transcript when process display is off — but the turn must still look
   // alive, so keep the typing indicator updated with what is running.
   if (!state.showProcess) {
-    if (chip && chip.name) showTyping(state.liveTurn?.botId || state.botId, `正在 ${chip.name}…`);
+    if (chip && chip.name) showTyping(state.liveTurn?.botId || state.botId, `正在${toolNameLabel(chip.name)}…`);
     return;
   }
   if (messagesEl.querySelector('.empty')) messagesEl.innerHTML = '';
@@ -3730,7 +5386,7 @@ function onTurnEnd(ev) {
   loadActivity();
   if (ev.status === 'needs_approval') {
     refreshPendingApprovals();
-    toast('运行暂停了 - 它在等你批准', true);
+    toast('运行暂停了，它在等你批准');
   }
   loadMemory();
 }
@@ -3752,70 +5408,135 @@ function appendApprovalCard(ev, sender) {
 /**
  * One card, two lives: interactive while the turn is blocked, read-only once
  * the transcript is reloaded (the server keeps the decision).
+ * Everything above the fold is plain language — the raw arguments live in one
+ * collapsed block at the bottom, for people who actually want them.
  */
 function buildApprovalCard(data) {
   const card = el('div', 'approval');
   card.dataset.approval = data.approvalId || '';
   const resolved = Boolean(data.decision);
+  const info = describeTool(data.tool, data.args);
 
-  const head = el('div', 'approval-head');
-  head.appendChild(el('span', `risk ${data.risk || 'MEDIUM'}`, data.risk || 'MEDIUM'));
-  head.appendChild(el('span', 'approval-title',
-    resolved ? `${data.tool} · ${data.decision}` : `${data.tool} ${'需要你的批准'}`));
+  const top = el('div', 'approval-top');
+  top.appendChild(el('span', 'approval-kicker', resolved ? '已处理' : '需要你确认'));
   if (!resolved) {
     const wait = el('span', 'approval-wait');
     wait.appendChild(el('span', 'dot'));
-    wait.appendChild(el('span', null, '等待中'));
-    head.appendChild(wait);
+    wait.appendChild(el('span', null, '在等你'));
+    top.appendChild(wait);
   }
-  card.appendChild(head);
+  card.appendChild(top);
 
-  card.appendChild(el('div', 'approval-why', data.reason || '这个操作在自动批准线以上。'));
+  const title = el('div', 'approval-title', info.title);
+  card.appendChild(title);
 
-  const argsText = typeof data.args === 'string' ? data.args : JSON.stringify(data.args || {}, null, 2);
-  const args = el('div', 'approval-args');
-  args.textContent = argsText;
-  card.appendChild(args);
-  if (argsText.length > 420) {
-    args.classList.add('clamped');
-    const more = el('button', 'btn tiny', '展开参数');
-    more.type = 'button';
-    more.style.marginTop = '6px';
-    more.addEventListener('click', () => {
-      args.classList.remove('clamped');
-      more.remove();
-    });
-    card.appendChild(more);
+  // If a fact is just the same value as the headline detail, show that fact's
+  // label as a caption instead of printing the value twice.
+  const detailLabel = info.detail
+    ? (info.facts.find(([, value]) => value === info.detail) || [])[0] || ''
+    : '';
+
+  if (info.detail) {
+    const detail = el('div', 'approval-detail');
+    if (detailLabel) detail.appendChild(el('div', 'approval-detail-k', detailLabel));
+    detail.appendChild(el('code', null, truncate(info.detail, 220)));
+    card.appendChild(detail);
   }
+
+  for (const [label, value] of info.facts) {
+    if (info.detail && value === info.detail) continue;
+    const line = el('div', 'approval-fact');
+    line.appendChild(el('span', 'approval-fact-k', label));
+    line.appendChild(el('span', 'approval-fact-v', value));
+    card.appendChild(line);
+  }
+
+  if (info.impact) card.appendChild(el('div', 'approval-impact', info.impact));
+
+  const why = reasonLabel(data.reason);
+  card.appendChild(el('div', 'approval-why', why ? `为什么停下来问你：${why}` : '这个操作会改动文件或对外发东西，所以先停下来问你。'));
 
   if (resolved) {
     card.classList.add('resolved');
     const actions = el('div', 'approval-actions');
-    const good = data.decision === 'approved';
-    actions.appendChild(el('span', `tag ${good ? 'good' : 'bad'}`, data.decision));
-    if (data.note) actions.appendChild(el('span', 'muted tiny', `备注：${data.note}`));
+    const good = data.decision === 'approved' || data.decision === 'approve';
+    const done = el('div', 'approval-done');
+    done.appendChild(el('span', `approval-pill ${good ? 'ok' : 'no'}`, decisionLabel(data.decision)));
+    done.appendChild(el('span', 'muted tiny', good ? '这一轮已经继续跑了。' : '它已经收到「不要做」。'));
+    actions.appendChild(done);
+    if (data.note) actions.appendChild(el('div', 'muted tiny', `备注：${data.note}`));
     card.appendChild(actions);
+    appendTechnicalDetails(card, data);
     return card;
   }
 
   const actions = el('div', 'approval-actions');
-  const note = el('input', 'field');
-  note.placeholder = '备注（可选）';
+  const choose = el('div', 'approval-choose');
+
+  const allow = el('button', 'choice');
+  allow.type = 'button';
+  allow.appendChild(el('span', 'choice-key', 'A'));
+  const allowBody = el('span', 'choice-body');
+  allowBody.appendChild(el('span', 'choice-title', '允许这一次'));
+  allowBody.appendChild(el('span', 'choice-desc', '只批准这一步，做完就结束'));
+  allow.appendChild(allowBody);
+  allow.appendChild(el('span', 'choice-go', '›'));
+
+  const reject = el('button', 'choice');
+  reject.type = 'button';
+  reject.appendChild(el('span', 'choice-key', 'B'));
+  const rejectBody = el('span', 'choice-body');
+  rejectBody.appendChild(el('span', 'choice-title', '拒绝'));
+  rejectBody.appendChild(el('span', 'choice-desc', '不执行，把「不行」告诉它'));
+  reject.appendChild(rejectBody);
+  reject.appendChild(el('span', 'choice-go', '›'));
+
+  const note = el('input', 'field approval-note');
+  note.placeholder = '想补一句话？（可选）';
   note.setAttribute('aria-label', '审批备注');
 
-  const approve = el('button', 'btn primary', '批准');
-  approve.type = 'button';
-  const deny = el('button', 'btn danger', '拒绝');
-  deny.type = 'button';
+  allow.addEventListener('click', () => decide(data.approvalId, 'approve', note.value, card, allow, reject));
+  reject.addEventListener('click', () => decide(data.approvalId, 'deny', note.value, card, allow, reject));
 
-  approve.addEventListener('click', () => decide(data.approvalId, 'approve', note.value, card, approve, deny));
-  deny.addEventListener('click', () => decide(data.approvalId, 'deny', note.value, card, approve, deny));
-
+  choose.appendChild(allow);
+  choose.appendChild(reject);
+  actions.appendChild(choose);
   actions.appendChild(note);
-  actions.appendChild(approve);
-  actions.appendChild(deny);
   card.appendChild(actions);
+  appendTechnicalDetails(card, data);
   return card;
+}
+
+/** Raw tool + arguments, folded away. Shared by live and resolved cards. */
+function appendTechnicalDetails(card, data) {
+  const args = safeArgs(data.args);
+  const raw = { 工具: data.tool || '', 参数: args };
+  if (data.risk) raw['风险'] = String(data.risk);
+  const tech = el('details', 'tech approval-tech');
+  tech.appendChild(el('summary', null, '技术细节'));
+  tech.appendChild(el('pre', 'tech-pre', JSON.stringify(raw, null, 2)));
+  card.appendChild(tech);
+}
+
+/** Turn the card into its settled state without rebuilding the transcript. */
+function settleApprovalCard(card, decision, note) {
+  if (!card) return;
+  hideToast(); // "waiting for you" is no longer true the moment you answer
+  card.classList.add('resolved');
+  const top = card.querySelector('.approval-top');
+  if (top && top.firstChild) top.firstChild.textContent = '已处理';
+  const wait = card.querySelector('.approval-wait');
+  if (wait) wait.remove();
+  const actions = card.querySelector('.approval-actions');
+  if (actions) {
+    actions.innerHTML = '';
+    const good = decision === 'approved' || decision === 'approve';
+    const done = el('div', 'approval-done');
+    done.appendChild(el('span', `approval-pill ${good ? 'ok' : 'no'}`, decisionLabel(decision)));
+    done.appendChild(el('span', 'muted tiny', good ? '这一轮会继续跑。' : '已经告诉它不要做。'));
+    actions.appendChild(done);
+    if (note) actions.appendChild(el('div', 'muted tiny', `备注：${note}`));
+  }
 }
 
 async function decide(approvalId, decision, note, card, approve, deny) {
@@ -3826,15 +5547,7 @@ async function decide(approvalId, decision, note, card, approve, deny) {
       method: 'POST',
       body: { decision, note: note || '' },
     });
-    if (card) {
-      card.classList.add('resolved');
-      const actions = card.querySelector('.approval-actions');
-      if (actions) {
-        actions.innerHTML = '';
-        actions.appendChild(el('span', 'muted tiny',
-          decision === 'approve' ? '已批准 - 这一轮继续跑。' : '已拒绝 - 机器人收到了“不”。'));
-      }
-    }
+    settleApprovalCard(card, decision, note);
     state.approvals = state.approvals.filter((a) => a.id !== approvalId);
     refreshPendingApprovals();
   } catch (err) {
@@ -3860,7 +5573,7 @@ async function refreshPendingApprovals() {
   if (pill) {
     const count = state.approvals.length;
     pill.hidden = count === 0;
-    pill.textContent = count === 1 ? '1 个待审批' : `${count} 个待审批`;
+    pill.textContent = count === 1 ? '1 个操作等你确认' : `${count} 个操作等你确认`;
     pill.dataset.bot = foreign[0]?.botId || state.approvals[0]?.botId || '';
   }
   for (const approval of state.approvals) {
@@ -3879,12 +5592,7 @@ async function refreshPendingApprovals() {
 function markApprovalResolved(ev) {
   const card = messagesEl.querySelector(`[data-approval="${CSS.escape(ev.approvalId || '')}"]`);
   if (!card) return;
-  card.classList.add('resolved');
-  const actions = card.querySelector('.approval-actions');
-  if (actions) {
-    actions.innerHTML = '';
-    actions.appendChild(el('span', 'muted tiny', `已处理：${ev.decision}`));
-  }
+  settleApprovalCard(card, ev.decision, ev.note || '');
 }
 
 /* ---------------------------------------------------------------------
@@ -3904,16 +5612,27 @@ async function loadActivity() {
   } catch { /* non-fatal */ }
 }
 
+const RUN_STATUS_LABELS = {
+  success: '完成', failed: '失败', needs_approval: '待批准',
+  timeout: '超时', cancelled: '已取消', max_steps: '到达步数上限',
+};
+function runStatusLabel(status) {
+  if (!status) return '—';
+  return RUN_STATUS_LABELS[String(status).toLowerCase()] || String(status);
+}
+
+const ACTIVITY_KIND_LABELS = { turn: '对话', tool: '工具', approval: '审批', message: '消息', error: '错误' };
+
 function activityLabel(ev) {
   switch (ev.type) {
-    case 'turn.start': return { kind: 'turn', text: `${ev.botName || ev.botId}: ${truncate(ev.text, 90)}` };
-    case 'turn.end': return { kind: 'turn', text: `${ev.botName || ev.botId} finished (${ev.status}${ev.steps ? `, ${ev.steps} steps` : ''})` };
-    case 'tool.call': return { kind: 'tool', text: `${ev.botName || ev.botId} → ${ev.name} [${ev.risk}] ${ev.decision}` };
-    case 'tool.result': return { kind: ev.ok ? 'tool' : 'error', text: `${ev.name} ${ev.ok ? 'ok' : 'failed'}${ev.denied ? ' (denied)' : ''}` };
-    case 'approval.request': return { kind: 'approval', text: `${ev.tool} asked for ${ev.risk} approval` };
-    case 'approval.resolved': return { kind: 'approval', text: `${ev.tool} ${ev.decision}` };
-    case 'approval.decided': return { kind: 'approval', text: `you ${ev.status === 'approved' ? 'approved' : 'denied'} ${truncate(ev.turnId, 14)}` };
-    case 'message': return { kind: 'message', text: `${ev.botName || ev.botId}: ${truncate(ev.text, 90)}` };
+    case 'turn.start': return { kind: 'turn', text: `${ev.botName || ev.botId}：${truncate(ev.text, 90)}` };
+    case 'turn.end': return { kind: 'turn', text: `${ev.botName || ev.botId} 结束（${runStatusLabel(ev.status)}${ev.steps ? `，${ev.steps} 步` : ''}）` };
+    case 'tool.call': return { kind: 'tool', text: `${ev.botName || ev.botId} · ${toolNameLabel(ev.name)}${ev.risk ? `（${riskLabel(ev.risk)}风险）` : ''} ${decisionLabel(ev.decision)}` };
+    case 'tool.result': return { kind: ev.ok ? 'tool' : 'error', text: `${toolNameLabel(ev.name)} ${ev.ok ? '完成' : '没成功'}${ev.denied ? '（被拒绝）' : ''}` };
+    case 'approval.request': return { kind: 'approval', text: `${toolNameLabel(ev.tool)} · 等你确认` };
+    case 'approval.resolved': return { kind: 'approval', text: `${toolNameLabel(ev.tool)} · ${decisionLabel(ev.decision)}` };
+    case 'approval.decided': return { kind: 'approval', text: `你${ev.status === 'approved' ? '批准' : '拒绝'}了 ${truncate(ev.turnId, 14)}` };
+    case 'message': return { kind: 'message', text: `${ev.botName || ev.botId}：${truncate(ev.text, 90)}` };
     case 'error': return { kind: 'error', text: truncate(ev.message, 110) };
     default: return null;
   }
@@ -3930,11 +5649,11 @@ function renderActivity() {
     const { kind, text } = activityLabel(ev);
     const row = el('div', 'activity-item');
     row.appendChild(el('span', 'activity-when', fmtClock(ev.ts).slice(0, 5)));
-    row.appendChild(el('span', `activity-kind k-${kind}`, kind));
+    row.appendChild(el('span', `activity-kind k-${kind}`, ACTIVITY_KIND_LABELS[kind] || kind));
     row.appendChild(el('span', 'activity-text', text));
     list.appendChild(row);
   }
-  if (!items.length) list.appendChild(el('div', 'muted tiny', 'Nothing yet. Send a message.'));
+  if (!items.length) list.appendChild(el('div', 'muted tiny', '还没有动态。发一条消息试试。'));
 }
 
 /* ---------------------------------------------------------------------
@@ -3944,7 +5663,7 @@ async function loadSkills() {
   try {
     state.skills = await api('/api/skills');
   } catch (err) {
-    if (err.status !== 401) toast(`skills: ${err.message}`, true);
+    if (err.status !== 401) toast(`技能加载失败：${err.message}`, true);
     return;
   }
   renderSkills();
@@ -3961,28 +5680,28 @@ function renderSkills() {
     const card = el('div', 'card');
     const title = el('div', 'card-title');
     title.appendChild(el('span', null, skill.name));
-    if (granted.has(skill.slug)) title.appendChild(el('span', 'tag good', 'granted'));
+    if (granted.has(skill.slug)) title.appendChild(el('span', 'tag good', '已授权'));
     card.appendChild(title);
-    card.appendChild(el('div', 'card-sub', skill.description || '(no description)'));
+    card.appendChild(el('div', 'card-sub', skill.description || '（没有描述）'));
 
-    const when = el('div', 'tiny muted', `Use when: ${skill.when_to_use || 'unspecified'}`);
+    const when = el('div', 'tiny muted', `适用场景：${skill.when_to_use || '未说明'}`);
     when.style.marginTop = '6px';
     card.appendChild(when);
 
     if (skill.steps && skill.steps.length) {
       const details = el('details');
       details.style.marginTop = '6px';
-      details.appendChild(el('summary', 'tiny muted', `${skill.steps.length} steps`));
+      details.appendChild(el('summary', 'tiny muted', `${skill.steps.length} 个步骤`));
       const ol = el('ol', 'skill-steps');
       for (const step of skill.steps) ol.appendChild(el('li', null, step));
       details.appendChild(ol);
-      if (skill.approval_notes) details.appendChild(el('div', 'skill-body', `Approval: ${skill.approval_notes}`));
+      if (skill.approval_notes) details.appendChild(el('div', 'skill-body', `审批说明：${skill.approval_notes}`));
       card.appendChild(details);
     }
     card.appendChild(el('div', 'card-sub mono', skill.file));
     list.appendChild(card);
   }
-  if (!state.skills.length) list.appendChild(el('div', 'muted tiny', 'No skills yet.'));
+  if (!state.skills.length) list.appendChild(el('div', 'muted tiny', '还没有技能。'));
 }
 
 /* ---------------------------------------------------------------------
@@ -3992,7 +5711,7 @@ async function loadRoutines() {
   try {
     state.routines = await api('/api/routines');
   } catch (err) {
-    if (err.status !== 401) toast(`routines: ${err.message}`, true);
+    if (err.status !== 401) toast(`定时任务加载失败：${err.message}`, true);
     return;
   }
   renderRoutines();
@@ -4023,15 +5742,15 @@ function renderRoutines() {
     const card = el('div', 'card');
     const title = el('div', 'card-title');
     title.appendChild(el('span', null, rt.name));
-    if (!rt.enabled) title.appendChild(el('span', 'tag', 'paused'));
+    if (!rt.enabled) title.appendChild(el('span', 'tag', '已暂停'));
     card.appendChild(title);
     card.appendChild(el('div', 'card-sub', `${(bot && bot.name) || rt.botId} · ${rt.schedule}`));
 
     const meta = el('div', 'routine-meta');
-    meta.appendChild(el('span', 'tag', `next ${fmtWhen(rt.nextRun)}`));
+    meta.appendChild(el('span', 'tag', `下次 ${fmtWhen(rt.nextRun)}`));
     if (rt.lastStatus) {
       const cls = rt.lastStatus === 'success' ? 'good' : rt.lastStatus === 'needs_approval' ? 'warn' : 'bad';
-      meta.appendChild(el('span', `tag ${cls}`, `last ${rt.lastStatus}`));
+      meta.appendChild(el('span', `tag ${cls}`, `上次 ${runStatusLabel(rt.lastStatus)}`));
     }
     if (rt.timezone) meta.appendChild(el('span', 'tag', rt.timezone));
     card.appendChild(meta);
@@ -4039,32 +5758,32 @@ function renderRoutines() {
     if (rt.runs && rt.runs.length) {
       const details = el('details');
       details.style.marginTop = '7px';
-      details.appendChild(el('summary', 'tiny muted', `${rt.runs.length} run(s)`));
+      details.appendChild(el('summary', 'tiny muted', `${rt.runs.length} 次运行`));
       for (const run of [...rt.runs].reverse()) {
         const line = el('div', 'tiny muted');
         line.style.marginTop = '4px';
-        line.textContent = `${fmtClock(run.startedAt)} · ${run.status}${run.summary ? ` · ${truncate(run.summary, 60)}` : ''}`;
+        line.textContent = `${fmtClock(run.startedAt)} · ${runStatusLabel(run.status)}${run.summary ? ` · ${truncate(run.summary, 60)}` : ''}`;
         details.appendChild(line);
       }
       card.appendChild(details);
     }
 
     const actions = el('div', 'approval-actions');
-    const test = el('button', 'btn tiny', 'Test now');
+    const test = el('button', 'btn tiny', '立即运行');
     test.type = 'button';
     test.addEventListener('click', async () => {
       test.disabled = true;
-      test.textContent = 'Running…';
+      test.textContent = '运行中…';
       try {
         const res = await api(`/api/routines/${encodeURIComponent(rt.id)}/test`, { method: 'POST', body: {} });
-        toast(`test run: ${res.run.status}`);
+        toast(`试运行：${runStatusLabel(res.run.status)}`);
       } catch (err) {
         toast(err.message, true);
       } finally {
         await loadRoutines();
       }
     });
-    const toggle = el('button', 'btn tiny', rt.enabled ? 'Pause' : 'Enable');
+    const toggle = el('button', 'btn tiny', rt.enabled ? '暂停' : '启用');
     toggle.type = 'button';
     toggle.addEventListener('click', async () => {
       try {
@@ -4074,7 +5793,7 @@ function renderRoutines() {
         toast(err.message, true);
       }
     });
-    const del = el('button', 'btn tiny danger', 'Delete');
+    const del = el('button', 'btn tiny danger', '删除');
     del.type = 'button';
     del.addEventListener('click', async () => {
       try {
@@ -4090,17 +5809,17 @@ function renderRoutines() {
     card.appendChild(actions);
     list.appendChild(card);
   }
-  if (!state.routines.length) list.appendChild(el('div', 'muted tiny', 'No routines yet.'));
+  if (!state.routines.length) list.appendChild(el('div', 'muted tiny', '还没有定时任务。'));
 }
 
 async function createRoutine() {
   const instruction = $('rt-instruction').value.trim();
-  if (!instruction) { toast('the routine needs an instruction', true); return; }
+  if (!instruction) { toast('定时任务需要一条指令', true); return; }
   try {
     await api('/api/routines', {
       method: 'POST',
       body: {
-        name: $('rt-name').value.trim() || 'Untitled routine',
+        name: $('rt-name').value.trim() || '未命名任务',
         instruction,
         botId: $('rt-bot').value,
         schedule: $('rt-schedule').value.trim() || 'every 60 minutes',
@@ -4110,7 +5829,7 @@ async function createRoutine() {
     $('rt-instruction').value = '';
     $('routine-form-card').style.display = 'none';
     await loadRoutines();
-    toast('routine created');
+    toast('定时任务已创建');
   } catch (err) {
     toast(err.message, true);
   }
@@ -4123,14 +5842,14 @@ async function loadMemory() {
   if (!state.botId) return;
   try {
     const data = await api(`/api/bots/${state.botId}/memory`);
-    $('memory-title').textContent = `Memory · ${data.entries.length} entries`;
+    $('memory-title').textContent = `记忆 · ${data.entries.length} 条`;
     $('bot-memory-path').textContent = data.memoryFile;
     $('shared-path').textContent = data.sharedFile;
-    $('bot-memory-pre').textContent = (data.memory || '').trim() || '(nothing saved yet)';
-    $('shared-pre').textContent = (data.shared || '').trim() || '(nothing saved yet)';
+    $('bot-memory-pre').textContent = (data.memory || '').trim() || '（还没有保存内容）';
+    $('shared-pre').textContent = (data.shared || '').trim() || '（还没有保存内容）';
   } catch (err) {
     if (err.status === 401) return;
-    $('bot-memory-pre').textContent = `could not load memory: ${err.message}`;
+    $('bot-memory-pre').textContent = `读取记忆失败：${err.message}`;
   }
 }
 
@@ -4480,7 +6199,13 @@ function formatPairCode(code) {
   return raw;
 }
 
-function openSettings() {
+function setSettingsNav(sectionId) {
+  document.querySelectorAll('.setnav').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.setTarget === sectionId);
+  });
+}
+
+function openSettings(section) {
   loadSettings().catch(() => { /* keep whatever we have */ });
   loadPolicy().catch(() => { /* older server: switch stays off */ });
   closeSidebar();
@@ -4490,7 +6215,10 @@ function openSettings() {
   $('settings-drawer').setAttribute('aria-hidden', 'false');
   $('settings-scrim').classList.add('show');
   normalizeOverlays();
-  if (!isMobile()) setTimeout(() => $('set-provider').focus(), 120);
+  const targetId = section || 'sec-model';
+  setSettingsNav(targetId);
+  if (section) setTimeout(() => $(section)?.scrollIntoView({ block: 'start' }), 80);
+  if (!isMobile() && !section) setTimeout(() => $('set-provider').focus(), 120);
 }
 
 function closeSettings() {
@@ -4667,7 +6395,17 @@ function switchTab(name) {
   if (name === 'routines') loadRoutines();
   if (name === 'memory') loadMemory();
   if (name === 'activity') loadActivity();
-  if (name === 'computer') { loadComputer(); refreshScreen(); }
+  if (name === 'computer') {
+    loadComputer();
+    refreshScreen();
+    syncViewer(activeTarget());
+  } else if (!desktopTakeover()) {
+    // Only the computer pane needs a live VNC socket; stop it when the human
+    // switches away, unless they are actively controlling the machine.
+    unmountViewer();
+    applyTargetMode();
+  }
+  reportUiState();
 }
 
 /* ---------------------------------------------------------------------
@@ -4721,16 +6459,20 @@ async function refreshScreen() {
   const img = $('pc-screen');
   const note = $('pc-screen-note');
   if (!img) return;
+  if (activeTarget().id !== 'local') return; // remote targets have no screenshot API
   try {
     const res = await fetch(`/api/computer/screenshot?ts=${Date.now()}`, { credentials: 'same-origin' });
+    if (activeTarget().id !== 'local') return; // user switched while the request was in flight
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      if (activeTarget().id !== 'local') return;
       img.style.display = 'none';
       note.textContent = body?.error?.message || '这台机器没有可截的屏幕（无桌面会话）';
       note.style.display = 'block';
       return;
     }
     const blob = await res.blob();
+    if (activeTarget().id !== 'local') return;
     if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
     const url = URL.createObjectURL(blob);
     img.dataset.url = url;
@@ -4738,6 +6480,7 @@ async function refreshScreen() {
     img.style.display = 'block';
     note.style.display = 'none';
   } catch (err) {
+    if (activeTarget().id !== 'local') return;
     note.textContent = `截屏失败：${err.message}`;
     note.style.display = 'block';
   }
@@ -4747,19 +6490,18 @@ async function refreshScreen() {
    another device. There is no cloud account and this menu says so. */
 function fillAccountMenu() {
   const settings = state.settings || {};
-  const pairing = (settings.pairing || state.pairing || {});
-  const origin = location.origin;
-  const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(origin);
-  $('am-name').textContent = (settings.app && settings.app.name) || 'Desk';
-  $('am-sub').textContent = local ? '本机模式 · 数据在这台电脑' : '远程 Hub 模式';
-  $('am-version').textContent = (settings.app && settings.app.version) || '—';
-  $('am-origin').textContent = origin;
-  $('am-devices').textContent = pairing.code ? '1 个配对码' : '—';
-  $('am-avatar').textContent = ((settings.app && settings.app.name) || 'D').slice(0, 1).toUpperCase();
+  const appName = (settings.app && settings.app.name) || 'Desk';
+  const initial = appName.slice(0, 1).toUpperCase();
+  $('am-name').textContent = appName;
+  $('am-avatar').textContent = initial;
+  // mirror it into the bottom-left chip in the sidebar
+  if ($('side-account-name')) $('side-account-name').textContent = appName;
+  if ($('side-avatar')) $('side-avatar').textContent = initial;
+  // Both chips name the machine being controlled, not where the UI happens
+  // to be served from.
+  syncTargetBranding();
 }
 
-/* Take over the hub's desktop: noVNC runs on the hub (hub/vnc-setup.sh) and we
-   simply embed it. Same-origin policies do not apply to a plain iframe. */
 /* ---------------------------------------------------------------------
    resizable chrome: sidebar (left) and work panel (right).
    Each divider drags its own CSS variable; widths survive a reload.
@@ -4789,7 +6531,7 @@ function wireEdgeResizer(handleId, cssVar, { min, max, fromRight }) {
   handle.addEventListener('pointerdown', (event) => {
     dragging = true;
     document.body.classList.add('resizing');
-    handle.setPointerCapture?.(event.pointerId);
+    try { handle.setPointerCapture?.(event.pointerId); } catch { /* synthetic / unsupported */ }
     event.preventDefault();
   });
   window.addEventListener('pointermove', (event) => {
@@ -4823,52 +6565,470 @@ function wireChromeResizers() {
   });
 }
 
-/** Fill the whole window with the work panel (the desktop viewer case). */
-function togglePanelMax(on) {
+/* ---------------------------------------------------------------------
+   take-over targets
+   "本机" is the machine Desk itself runs on. Anything else in the list is a
+   noVNC viewer on the LAN, remembered on this device only (localStorage).
+   --------------------------------------------------------------------- */
+const VNC_TARGETS_KEY = 'desk.vncTargets';
+const VNC_ACTIVE_KEY = 'desk.vncTargetId';
+// No machine is baked in: addresses and passwords are per-install state, not
+// something that belongs in a public source tree. The panel starts on "本机"
+// and the human adds their own machines from "+ 机器".
+const VNC_SEED_TARGETS = [];
+let editingTargetId = null;
+let viewerUrl = '';
+
+function readTargets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(VNC_TARGETS_KEY) || 'null');
+    if (Array.isArray(raw)) {
+      return raw.filter((t) => t && typeof t.id === 'string' && typeof t.host === 'string' && t.host);
+    }
+  } catch { /* corrupted; fall through to the seed */ }
+  return VNC_SEED_TARGETS.map((t) => ({ ...t }));
+}
+
+function writeTargets(list) {
+  try { localStorage.setItem(VNC_TARGETS_KEY, JSON.stringify(list)); } catch { /* private mode */ }
+}
+
+/** First run: start on "本机" with an empty list; machines are added by hand. */
+function ensureTargets() {
+  try {
+    if (localStorage.getItem(VNC_TARGETS_KEY) !== null) return;
+    writeTargets([]);
+  } catch { /* private mode: targets stay in memory */ }
+}
+
+function activeTarget() {
+  let id = 'local';
+  try { id = localStorage.getItem(VNC_ACTIVE_KEY) || 'local'; } catch { /* ignore */ }
+  if (id === 'local') return { id: 'local', name: '这台电脑', local: true };
+  return readTargets().find((t) => t.id === id) || { id: 'local', name: '这台电脑', local: true };
+}
+
+function targetLabel(t) {
+  return `${t.host}:${t.port || 6080}`;
+}
+
+/** The account chip and the About block speak for the machine being controlled. */
+function syncTargetBranding() {
+  const target = activeTarget();
+  const remote = target.id !== 'local';
+  const sub = remote ? target.name : '本机模式';
+  if ($('side-account-sub')) $('side-account-sub').textContent = sub;
+  if ($('am-sub')) $('am-sub').textContent = remote ? `接管：${target.name}` : '本机模式 · 数据在这台电脑';
+  if ($('about-origin')) {
+    $('about-origin').textContent = remote
+      ? `${target.protocol === 'https:' ? 'https' : 'http'}://${targetLabel(target)}`
+      : location.origin;
+    $('about-origin').title = remote ? `正在接管：${target.name}` : 'Desk 运行在这台电脑上';
+  }
+  if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
+}
+
+/** Accept "1.2.3.4", "1.2.3.4:6080" or a full noVNC URL. */
+function parseTargetAddress(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(text) ? text : `http://${text}`); }
+  catch { return null; }
+  if (!u.hostname) return null;
+  const protocol = u.protocol === 'https:' ? 'https:' : 'http:';
+  const port = Number(u.port || (protocol === 'https:' ? 443 : 6080));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const path = u.pathname && u.pathname !== '/' ? u.pathname : '/vnc.html';
+  return { protocol, host: u.hostname, port, path };
+}
+
+/**
+ * Load the bundled noVNC page from this install, then connect it to the target
+ * machine's websockify. Keeping the page same-origin lets us hide its control
+ * bar, overlay a "take over" shield, and scale the remote cursor correctly.
+ */
+function viewerUrlFor({ host, port = 6080, password = '', encrypted = false }) {
+  const url = new URL('/novnc/vnc.html', location.origin);
+  url.searchParams.set('autoconnect', '1');
+  url.searchParams.set('resize', 'scale');
+  url.searchParams.set('reconnect', '1');
+  url.searchParams.set('reconnect_delay', '2000');
+  url.searchParams.set('host', host);
+  url.searchParams.set('port', String(port));
+  url.searchParams.set('path', 'websockify');
+  if (encrypted) url.searchParams.set('encrypt', '1');
+  if (password) url.searchParams.set('password', password);
+  return url.toString();
+}
+
+function targetViewerUrl(t) {
+  if (t.id === 'local') {
+    let password = '';
+    try {
+      const raw = new URL(state.computer?.desktop?.url || '');
+      password = raw.searchParams.get('password') || '';
+    } catch { /* not loaded yet */ }
+    const host = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? '127.0.0.1' : location.hostname;
+    return viewerUrlFor({ host, port: 6080, password });
+  }
+  return viewerUrlFor({
+    host: t.host,
+    port: t.port || 6080,
+    password: t.password || '',
+    encrypted: t.protocol === 'https:',
+  });
+}
+
+function renderTargetPicker() {
+  const select = $('pc-target');
+  if (!select) return;
+  const active = activeTarget();
+  select.innerHTML = [
+    '<option value="local">这台电脑（本机）</option>',
+    ...readTargets().map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.host)}</option>`),
+  ].join('');
+  select.value = active.id;
+  if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
+  applyTargetMode(active);
+}
+
+/** Swap the screenshot card for the live remote view, or back. */
+function applyTargetMode(target = activeTarget()) {
+  const remote = target.id !== 'local';
+  const card = $('pc-remote');
+  const wrap = $('pc-vnc-wrap');
+  if (card) card.hidden = !remote || desktopTakeover() || Boolean(wrap && !wrap.hidden);
+  if (remote) {
+    if ($('pc-remote-name')) $('pc-remote-name').textContent = target.name || target.host;
+    if ($('pc-remote-addr')) $('pc-remote-addr').textContent = targetLabel(target);
+    if ($('pc-screen')) $('pc-screen').style.display = 'none';
+    if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
+  } else if (!desktopTakeover()) {
+    if ($('pc-screen')) $('pc-screen').style.display = '';
+    refreshScreen();
+  }
+  for (const id of ['pc-stats', 'pc-procs', 'pc-procs-head', 'pc-local-note']) {
+    const node = $(id);
+    if (node) node.hidden = id === 'pc-local-note' ? !remote : remote;
+  }
+  if ($('pc-target-hint')) {
+    $('pc-target-hint').textContent = remote
+      ? `远程：${target.name || target.host} · ${desktopTakeover() ? '正在控制' : '实时画面'}`
+      : '本机：Desk 运行在这台电脑上';
+  }
+  if ($('pc-target-edit')) $('pc-target-edit').hidden = !remote;
+  syncTargetBranding();
+  syncViewer(target);
+  if (timezonePref().mode === 'target') {
+    syncTimezoneUi();
+    probeActiveTargetTimezone();
+  }
+}
+
+/**
+ * The viewer iframe stays mounted while the target is remote: a live picture
+ * before takeover, keyboard/mouse control after. No reconnect when toggling.
+ */
+function syncViewer(target = activeTarget()) {
+  const wrap = $('pc-vnc-wrap');
+  const shield = $('pc-vnc-shield');
+  if (!wrap) return;
+  const remote = target.id !== 'local';
+  const takeover = desktopTakeover();
+
+  if (!remote && !takeover) {
+    unmountViewer();
+    if (shield) shield.hidden = true;
+    return;
+  }
+  if (remote && !takeover && !(state.panelOpen && state.tab === 'computer')) {
+    // Nothing is looking at the panel: do not keep a VNC session open.
+    unmountViewer();
+    if (shield) shield.hidden = true;
+    if ($('pc-remote')) $('pc-remote').hidden = false;
+    return;
+  }
+
+  const url = targetViewerUrl(target);
+  if (!url) return;
+  if (viewerUrl !== url || !wrap.querySelector('iframe')) {
+    wrap.innerHTML = '';
+    const frame = document.createElement('iframe');
+    frame.src = url;
+    frame.setAttribute('title', `${target.name || '远程'}桌面`);
+    frame.setAttribute('allow', 'clipboard-read; clipboard-write');
+    frame.referrerPolicy = 'no-referrer';
+    wrap.appendChild(frame);
+    viewerUrl = url;
+  }
+  wrap.hidden = false;
+  if ($('pc-screen')) $('pc-screen').style.display = 'none';
+  if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
+  if ($('pc-remote')) $('pc-remote').hidden = true;
+  const card = $('pc-screen-wrap');
+  if (card) {
+    card.classList.add('viewer');
+    card.classList.toggle('takeover', takeover);
+    card.classList.toggle('preview', !takeover);
+  }
+  if (shield) {
+    shield.hidden = takeover;
+    if (!takeover) {
+      if ($('pc-preview-name')) $('pc-preview-name').textContent = `实时画面 · ${target.name || target.host}`;
+    }
+  }
+  if ($('pc-desktop')) $('pc-desktop').textContent = takeover ? '返回预览' : '接管桌面';
+}
+
+function unmountViewer() {
+  const wrap = $('pc-vnc-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  wrap.hidden = true;
+  viewerUrl = '';
+  const card = $('pc-screen-wrap');
+  if (card) {
+    card.classList.remove('takeover', 'viewer', 'preview');
+  }
+  if ($('pc-vnc-shield')) $('pc-vnc-shield').hidden = true;
+}
+
+function selectTakeoverTarget(id) {
+  try { localStorage.setItem(VNC_ACTIVE_KEY, id); } catch { /* ignore */ }
+  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
+  if (desktopTakeover()) closeDesktopViewer();
+  renderTargetPicker();
+  reportUiState();
+}
+
+function fillZoneSelect(select, current) {
+  if (!select) return;
+  const zones = new Set(COMMON_TIMEZONES);
+  try { for (const zone of Intl.supportedValuesOf('timeZone')) zones.add(zone); } catch { /* older engine */ }
+  if (current) zones.add(current);
+  select.innerHTML = ['<option value="">不确定</option>', ...[...zones].sort().map((zone) => (
+    `<option value="${escapeHtml(zone)}">${escapeHtml(timezoneLabel(zone))}</option>`
+  ))].join('');
+  select.value = current || '';
+}
+
+function openTargetModal(target) {
+  editingTargetId = target?.id || null;
+  $('vnc-modal-title').textContent = editingTargetId ? '编辑机器' : '连接一台机器';
+  $('vnc-name').value = target?.name || '';
+  $('vnc-addr').value = target ? targetLabel(target) : '';
+  $('vnc-pass').value = target?.password || '';
+  fillZoneSelect($('vnc-tz'), target?.timezone || '');
+  // A brand-new machine is usually blank, so offer to set it up over SSH by
+  // default. Editing an existing machine leaves the switch off so a working
+  // VNC server is never reinstalled by accident.
+  const fresh = !editingTargetId;
+  $('vnc-auto').checked = fresh;
+  $('vnc-ssh-fields').hidden = !fresh;
+  $('vnc-save').textContent = fresh ? '保存并配置' : '保存';
+  $('vnc-ssh-user').value = '';
+  $('vnc-ssh-pass').value = '';
+  $('vnc-ssh-port').value = '22';
+  $('vnc-progress').hidden = true;
+  $('vnc-progress').className = 'modal-note';
+  $('vnc-delete').hidden = !editingTargetId;
+  $('vnc-modal-note').hidden = true;
+  $('vnc-modal').classList.add('open');
+  $('vnc-modal').setAttribute('aria-hidden', 'false');
+  $('vnc-scrim').classList.add('show');
+  setTimeout(() => $('vnc-name').focus(), 50);
+}
+
+function closeTargetModal() {
+  $('vnc-modal').classList.remove('open');
+  $('vnc-modal').setAttribute('aria-hidden', 'true');
+  $('vnc-scrim').classList.remove('show');
+  editingTargetId = null;
+}
+
+function saveTargetFromModal() {
+  const name = $('vnc-name').value.trim();
+  const address = parseTargetAddress($('vnc-addr').value);
+  const password = $('vnc-pass').value;
+  const note = $('vnc-modal-note');
+  if (!name) {
+    note.textContent = '先给它起一个名字，比如「Ubuntu 虚拟机」。';
+    note.hidden = false;
+    return;
+  }
+  if (!address) {
+    note.textContent = '地址不对，例子：192.168.1.20:6080';
+    note.hidden = false;
+    return;
+  }
+  const timezone = $('vnc-tz').value || '';
+  // Read the SSH fields before the modal closes; the DOM keeps the values but
+  // reading first makes the intent explicit.
+  const provision = $('vnc-auto')?.checked
+    ? {
+      host: address.host,
+      sshPort: Number($('vnc-ssh-port').value) || 22,
+      username: $('vnc-ssh-user').value.trim(),
+      password: $('vnc-ssh-pass').value,
+      vncPassword: password || 'desk1234',
+    }
+    : null;
+  if (provision && (!provision.username || !provision.password)) {
+    note.textContent = '自动配置需要被控机器的 SSH 账号和密码。';
+    note.hidden = false;
+    return;
+  }
+  // The installer uses desk1234 when the human left the VNC field blank; keep
+  // the same value on the machine entry so the live view can sign in later.
+  const savedPassword = provision && !password ? provision.vncPassword : password;
+  const targets = readTargets();
+  let activeId = editingTargetId;
+  if (editingTargetId) {
+    const index = targets.findIndex((t) => t.id === editingTargetId);
+    if (index >= 0) targets[index] = { ...targets[index], ...address, name, password: savedPassword, timezone };
+  } else {
+    const id = `machine-${Date.now().toString(36)}`;
+    activeId = id;
+    targets.push({ id, name, password: savedPassword, ...address, timezone });
+    try { localStorage.setItem(VNC_ACTIVE_KEY, id); } catch { /* ignore */ }
+  }
+  writeTargets(targets);
+  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
+  if (desktopTakeover()) closeDesktopViewer();
+  renderTargetPicker();
+  toast('已记住这台机器', false);
+  // #10: a brand-new machine with SSH details gets provisioned right away.
+  // Keep the dialog open so its progress line is visible.
+  if (provision) {
+    startRemoteProvision(activeId, provision);
+    return;
+  }
+  closeTargetModal();
+  reportUiState();
+}
+
+/**
+ * Run the target-side setup and show its progress in the machine dialog.
+ * The SSH password is sent once, lives in this job only, and is never stored
+ * in localStorage or the target list.
+ */
+async function startRemoteProvision(targetId, options) {
+  const progress = $('vnc-progress');
+  const save = $('vnc-save');
+  const show = (text, kind = '') => {
+    if (!progress) return;
+    progress.hidden = false;
+    progress.className = `modal-note${kind ? ` ${kind}` : ''}`;
+    progress.textContent = text;
+  };
+  show('正在连接被控机器…');
+  if (save) save.disabled = true;
+  try {
+    const started = await api('/api/remote/provision', {
+      method: 'POST',
+      body: { targetId, ...options },
+    });
+    const jobId = started?.job?.id;
+    if (!jobId) throw new Error('服务没有返回配置任务');
+    let job = started.job;
+    let quietTicks = 0;
+    while (job && job.state === 'running') {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const before = job.message;
+      job = await api(`/api/remote/provision/${encodeURIComponent(jobId)}`);
+      show(job.message || '正在配置…');
+      quietTicks = job.message === before ? quietTicks + 1 : 0;
+      // Long apt installs can be silent for minutes; keep the human oriented.
+      if (quietTicks === 80) show('安装还在进行，软件包较大时需要几分钟…');
+    }
+    if (job.state === 'error') throw new Error(job.message || '远程配置失败');
+
+    if (job.timezone) {
+      const next = readTargets().map((t) => (
+        t.id === targetId ? { ...t, timezone: job.timezone } : t
+      ));
+      writeTargets(next);
+      if (timezonePref().mode === 'target') applyTimezone({ push: true });
+    }
+    show(job.message || '远程桌面已就绪。', job.state === 'warning' ? '' : 'ok');
+    // The preview iframe was mounted before the target had a VNC server; drop
+    // it so the next render opens a fresh connection instead of showing the
+    // failed page forever.
+    const wrap = $('pc-vnc-wrap');
+    if (wrap) wrap.innerHTML = '';
+    viewerUrl = '';
+    renderTargetPicker();
+    reportUiState();
+    toast(job.state === 'warning' ? '配置完成，但端口还没就绪' : '远程机器已经可以使用了', job.state === 'warning');
+    setTimeout(() => {
+      if ($('vnc-modal')?.classList.contains('open')) closeTargetModal();
+    }, job.state === 'warning' ? 4000 : 1200);
+  } catch (err) {
+    show(`自动配置失败：${err.message}`, 'bad');
+  } finally {
+    if (save) save.disabled = false;
+  }
+}
+
+function deleteTargetFromModal() {
+  if (!editingTargetId) return;
+  const targets = readTargets().filter((t) => t.id !== editingTargetId);
+  writeTargets(targets);
+  try { localStorage.setItem(VNC_ACTIVE_KEY, 'local'); } catch { /* ignore */ }
+  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
+  if (desktopTakeover()) closeDesktopViewer();
+  closeTargetModal();
+  renderTargetPicker();
+  toast('已删除', false);
+}
+
+/** Fill the whole window with the single desktop card. */
+async function togglePanelMax(on) {
   const next = on === undefined ? !document.body.classList.contains('panel-max') : on;
   document.body.classList.toggle('panel-max', next);
   if (next) {
     state.panelOpen = true;
     applyLayoutPrefs();
     switchTab('computer');
-    // Always (re)build the viewer: an iframe created while the panel was tiny
-    // keeps a sized buffer and would look stretched afterwards.
-    if (state.computer?.desktop?.url || location.hostname) openDesktopViewer();
-    $('pc-max').textContent = '退出全屏';
-  } else {
-    $('pc-max').textContent = '全屏';
+  }
+  $('pc-max').textContent = next ? '退出全屏' : '全屏';
+  syncViewer(activeTarget());
+}
+
+function desktopTakeover() {
+  return $('pc-screen-wrap')?.classList.contains('takeover');
+}
+
+/** Start controlling the desktop. For a remote target this only unlocks the
+ *  already-running live view, so there is no reconnect and no black frame. */
+async function openDesktopViewer() {
+  const target = activeTarget();
+  if (target.id === 'local' && !state.computer?.desktop?.url) {
+    try { await loadComputer(); } catch { /* the viewer can still ask for a password */ }
+  }
+  const card = $('pc-screen-wrap');
+  if (card) card.classList.add('takeover');
+  syncViewer(target);
+  if ($('pc-remote')) $('pc-remote').hidden = true;
+  if ($('pc-desktop')) $('pc-desktop').textContent = '返回预览';
+  if ($('pc-target-hint') && target.id !== 'local') {
+    $('pc-target-hint').textContent = `远程：${target.name || target.host} · 正在控制`;
   }
 }
 
-async function openDesktopViewer() {
-  // The URL carries the VNC password, so make sure /api/computer has answered
-  // before building the iframe (otherwise noVNC asks for it again).
-  if (!state.computer?.desktop?.url) {
-    try { await loadComputer(); } catch { /* fall back to the bare URL below */ }
+/** Stop controlling. A remote machine keeps its live picture; the local
+ *  machine drops the session entirely and returns to the screenshot. */
+function closeDesktopViewer() {
+  const card = $('pc-screen-wrap');
+  if (card) card.classList.remove('takeover');
+  if (activeTarget().id === 'local') {
+    unmountViewer();
+  } else {
+    syncViewer(activeTarget());
   }
-  const wrap = $('pc-vnc-wrap');
-  const url = state.computer?.desktop?.url
-    || `http://${location.hostname}:6080/vnc.html?autoconnect=1&resize=scale`;
-  wrap.innerHTML = '';
-  const box = el('div', 'pc-vnc-frame');
-  const frame = document.createElement('iframe');
-  frame.src = url;
-  frame.setAttribute('title', '远程桌面');
-  frame.setAttribute('allow', 'clipboard-read; clipboard-write');
-  frame.referrerPolicy = 'no-referrer';
-  box.appendChild(frame);
-  if (document.body.classList.contains('panel-max')) {
-    const exit = el('button', 'pc-exit');
-    exit.type = 'button';
-    exit.textContent = '退出全屏 (Esc)';
-    exit.addEventListener('click', () => togglePanelMax(false));
-    box.appendChild(exit);
-  }
-  const row = el('div', 'row-note');
-  row.innerHTML = `如果没有画面：确认 Hub 上跑着 <code>desk-vnc</code>（${escapeHtml(url.split('/vnc.html')[0])}），
-    并且它的密码是你在 Hub 上设置的那个。`;
-  box.appendChild(row);
-  wrap.appendChild(box);
+  if ($('pc-desktop')) $('pc-desktop').textContent = '接管桌面';
+  applyTargetMode();
 }
 
 function stopScreenLoop() {  if (screenTimer) { clearInterval(screenTimer); screenTimer = null; }
@@ -5049,13 +7209,25 @@ function wireChrome() {
   });
   $('settings-close').addEventListener('click', closeSettings);
   $('settings-scrim').addEventListener('click', closeSettings);
+  document.querySelectorAll('.setnav').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = $(btn.dataset.setTarget);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setSettingsNav(btn.dataset.setTarget);
+    });
+  });
 
   $('mock-banner-btn').addEventListener('click', openSettings);
+  $('group-delete-btn')?.addEventListener('click', deleteCurrentGroup);
+  $('confirm-ok')?.addEventListener('click', () => settleConfirm(true));
+  $('confirm-cancel')?.addEventListener('click', () => settleConfirm(false));
+  $('confirm-close')?.addEventListener('click', () => settleConfirm(false));
+  $('confirm-scrim')?.addEventListener('click', () => settleConfirm(false));
   $('approvals-pill').addEventListener('click', () => {
     const botId = $('approvals-pill').dataset.bot;
     if (botId) {
       selectBot(botId);
-      toast('这个 Bot 在等你批准', false);
+      toast('这个助手在等你批准', false);
     } else {
       state.panelOpen = true;
       applyLayoutPrefs();
@@ -5075,16 +7247,53 @@ function wireChrome() {
     menu.hidden = true;
   });
   $('am-settings').addEventListener('click', () => { $('account-menu').hidden = true; openSettings(); });
-  $('am-pair').addEventListener('click', () => { $('account-menu').hidden = true; openSettings(); });
-  $('pc-refresh').addEventListener('click', () => { loadComputer(); refreshScreen(); });
-  $('pc-desktop').addEventListener('click', openDesktopViewer);
-  $('pc-max').addEventListener('click', () => togglePanelMax());
-  wireChromeResizers();
-  // Esc leaves the full-window desktop view.
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && document.body.classList.contains('panel-max')) {
-      togglePanelMax(false);
+  $('am-pair').addEventListener('click', () => { $('account-menu').hidden = true; openSettings('sec-pair'); });
+  $('pc-refresh').addEventListener('click', () => {
+    if (activeTarget().id !== 'local') {
+      const wrap = $('pc-vnc-wrap');
+      if (wrap) wrap.innerHTML = '';
+      viewerUrl = '';
+      syncViewer(activeTarget());
+      return;
     }
+    loadComputer();
+    refreshScreen();
+  });
+  $('pc-desktop').addEventListener('click', () => {
+    if (desktopTakeover()) closeDesktopViewer();
+    else openDesktopViewer();
+  });
+  $('pc-preview-take').addEventListener('click', () => openDesktopViewer());
+  $('pc-max').addEventListener('click', () => togglePanelMax());
+  $('pc-exit').addEventListener('click', () => togglePanelMax(false));
+  $('pc-target').addEventListener('change', (event) => selectTakeoverTarget(event.target.value));
+  $('pc-target-add').addEventListener('click', () => openTargetModal(null));
+  $('pc-target-edit').addEventListener('click', () => {
+    const target = activeTarget();
+    if (target.id !== 'local') openTargetModal(target);
+  });
+  $('pc-remote-connect').addEventListener('click', () => openDesktopViewer());
+  $('vnc-modal-close').addEventListener('click', closeTargetModal);
+  $('vnc-cancel').addEventListener('click', closeTargetModal);
+  $('vnc-scrim').addEventListener('click', closeTargetModal);
+  $('vnc-save').addEventListener('click', saveTargetFromModal);
+  $('vnc-delete').addEventListener('click', deleteTargetFromModal);
+  $('vnc-auto').addEventListener('change', () => {
+    $('vnc-ssh-fields').hidden = !$('vnc-auto').checked;
+    $('vnc-save').textContent = $('vnc-auto').checked ? '保存并配置' : '保存';
+  });
+  $('vnc-modal').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target.matches('input')) {
+      event.preventDefault();
+      saveTargetFromModal();
+    }
+  });
+  wireChromeResizers();
+  // Esc closes the machine dialog first, then the full-window desktop view.
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if ($('vnc-modal')?.classList.contains('open')) { closeTargetModal(); return; }
+    if (document.body.classList.contains('panel-max')) togglePanelMax(false);
   });
   $('auto-approve-all').addEventListener('change', (event) => {
     savePolicy({ autoApproveAll: Boolean(event.target.checked) });
@@ -5151,14 +7360,23 @@ function wireChrome() {
   });
   $('new-bot-save').addEventListener('click', async () => {
     const name = $('new-bot-name').value.trim();
-    if (!name) { toast('a bot needs a name', true); return; }
+    if (!name) { toast('先给这个助手起个名字', true); return; }
     try {
-      await api('/api/bots', { method: 'POST', body: { name, role: $('new-bot-role').value.trim() } });
+      await api('/api/bots', {
+        method: 'POST',
+        body: {
+          name,
+          role: $('new-bot-role').value.trim(),
+          // UI-level language rule: the backend has no locale switch yet, so
+          // the persona is where "always answer in Chinese" lives.
+          persona: '始终使用简体中文回答。技术名词、命令、路径、代码和报错原文保持原样。',
+        },
+      });
       state.bots = await api('/api/bots');
       renderBots();
       renderRoutines();
       $('new-bot-cancel').click();
-      toast('bot created');
+      toast('助手已创建');
     } catch (err) {
       toast(err.message, true);
     }
@@ -5189,7 +7407,7 @@ function wireChrome() {
   });
   $('botedit-name-input').addEventListener('input', () => {
     state.deleteArmed = false;
-    $('botedit-delete').textContent = '删除这个 Bot';
+    $('botedit-delete').textContent = '删除这个助手';
   });
   $('botedit-name-input').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); saveBotEdit(); }

@@ -30,6 +30,18 @@ extraResources:
     to: server/skills
   - from: ../workspace
     to: server/workspace
+  - from: ../hub
+    to: server/hub
+  # ssh2 is pure JS when cpu-features is absent; keep its runtime deps next to
+  # it so `node resources/server/src/server.mjs` can resolve them.
+  - from: ../node_modules/ssh2
+    to: server/node_modules/ssh2
+  - from: ../node_modules/asn1
+    to: server/node_modules/asn1
+  - from: ../node_modules/bcrypt-pbkdf
+    to: server/node_modules/bcrypt-pbkdf
+  - from: ../node_modules/tweetnacl
+    to: server/node_modules/tweetnacl
   - from: ../package.json
     to: server/package.json
 
