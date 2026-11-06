@@ -52,6 +52,13 @@ if command -v apt-get >/dev/null 2>&1; then
   if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium-browser >/dev/null 2>&1 || true
   fi
+  # A viewable desktop needs a session environment. Prefer XFCE (light, installs
+  # in ~1 min); if the machine already has GNOME the session helper uses that.
+  if ! command -v xfce4-session >/dev/null 2>&1 && ! command -v gnome-session >/dev/null 2>&1; then
+    say "安装桌面环境（XFCE，约 1-2 分钟）"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4 xfce4-terminal dbus-x11 >/dev/null 2>&1 || \
+      echo "[desk] 警告：桌面环境没装成，Bot 桌面会是黑屏；Hub 本身不受影响"
+  fi
 fi
 
 say "3/6 解开程序包到 $APP_DIR"
@@ -60,6 +67,27 @@ tar xzf "$PKG" -C "$APP_DIR"
 [ -f "$APP_DIR/src/server.mjs" ] || { echo "[desk] 程序包内容不对，缺 src/server.mjs" >&2; exit 1; }
 mkdir -p "$APP_DIR/data" "$APP_DIR/workspace"
 chown -R "$RUN_USER:$RUN_USER" "$APP_DIR"
+
+# Per-bot desktop session launcher (GNOME when the host has the memory for it).
+cat > /tmp/desk-bot-session <<'DESK_SESSION_EOF'
+#!/bin/sh
+DISP="$1"
+[ -n "$DISP" ] || exit 1
+export DISPLAY=":$DISP"
+export XDG_SESSION_TYPE=x11
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export LIBGL_ALWAYS_SOFTWARE=1
+export NO_AT_BRIDGE=1
+MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+if command -v gnome-session >/dev/null 2>&1 && [ "$MEM_MB" -ge 6000 ]; then
+  export XDG_CURRENT_DESKTOP=GNOME
+  export GNOME_SHELL_SESSION_MODE=ubuntu
+  exec dbus-launch --exit-with-session gnome-session --session=ubuntu
+fi
+export XDG_CURRENT_DESKTOP=XFCE
+exec dbus-launch --exit-with-session xfce4-session
+DESK_SESSION_EOF
+install -m 755 /tmp/desk-bot-session /usr/local/bin/desk-bot-session
 
 say "4/6 注册 ${SERVICE}.service"
 CHROME_BIN=""
