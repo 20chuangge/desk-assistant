@@ -6695,14 +6695,27 @@ function readTargets() {
   try {
     const raw = JSON.parse(localStorage.getItem(VNC_TARGETS_KEY) || 'null');
     if (Array.isArray(raw)) {
-      return raw.filter((t) => t && typeof t.id === 'string' && typeof t.host === 'string' && t.host);
+      const clean = raw.filter((t) => t && typeof t.id === 'string' && typeof t.host === 'string' && t.host);
+      return dedupeTargets(clean);
     }
   } catch { /* corrupted; fall through to the seed */ }
   return VNC_SEED_TARGETS.map((t) => ({ ...t }));
 }
 
+function dedupeTargets(list) {
+  const byHost = new Map();
+  for (const t of list) {
+    const key = String(t.host || '').trim().toLowerCase();
+    if (!key) continue;
+    const prev = byHost.get(key);
+    // keep the newest entry (last write wins), but never lose a name
+    byHost.set(key, prev ? { ...prev, ...t, name: t.name || prev.name } : t);
+  }
+  return [...byHost.values()];
+}
+
 function writeTargets(list) {
-  try { localStorage.setItem(VNC_TARGETS_KEY, JSON.stringify(list)); } catch { /* private mode */ }
+  try { localStorage.setItem(VNC_TARGETS_KEY, JSON.stringify(dedupeTargets(list))); } catch { /* private mode */ }
 }
 
 /** First run: start on "本机" with an empty list; machines are added by hand. */

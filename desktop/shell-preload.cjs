@@ -8,3 +8,13 @@ contextBridge.exposeInMainWorld('deskShell', {
   toggleMaximize: () => ipcRenderer.send('shell:toggle-maximize'),
   close: () => ipcRenderer.send('shell:close'),
 });
+
+// Machine switching lives in the main window, which uses THIS preload (not
+// preload.mjs). Without it window.desk is undefined and every machine button
+// silently does nothing.
+contextBridge.exposeInMainWorld('desk', {
+  pickMachine: () => ipcRenderer.invoke('desk:pick-machine'),
+  switchHub: (url) => ipcRenderer.invoke('desk:switch-hub', url),
+  listMachines: () => ipcRenderer.invoke('desk:list-machines'),
+  useLocal: () => ipcRenderer.invoke('desk:use-local'),
+});
