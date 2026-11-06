@@ -6718,7 +6718,7 @@ function syncTargetBranding() {
   const onHub = !/^(https?:\/\/)?(127\.0\.0\.1|localhost|\[\]|\[::1\])(:|\/|$)/.test(location.origin);
   const sub = onHub
     ? `远程 Hub · ${state.computer?.host?.hostname || location.hostname}`
-    : (remote ? target.name : '本机模式');
+    : '本机模式';
   if ($('side-account-sub')) $('side-account-sub').textContent = sub;
   // Same sentence as the sidebar: the popover must not claim "local" while the
   // panel is talking to a hub.
