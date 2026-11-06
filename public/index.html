@@ -4412,6 +4412,10 @@ function renderBots() {
 }
 
 async function selectBot(id) {
+  // A different bot means a different screen: always start in preview.
+  const card = $('pc-screen-wrap');
+  if (card) card.classList.remove('takeover');
+  if ($('pc-desktop')) $('pc-desktop').textContent = '接管桌面';
   state.botId = id;
   if (state.groupId) {          // leaving a group for a 1:1 chat
     state.groupId = null;
@@ -6497,7 +6501,13 @@ async function loadComputer() {
   if (data.desktop?.perBot && data.desktop?.url) {
     const wrap = $('pc-vnc-wrap');
     const current = wrap?.querySelector('iframe')?.getAttribute('src') || '';
-    if (current !== data.desktop.url) openDesktopViewer();
+    if (current !== data.desktop.url) {
+      // Preview first: mount the live view with the shield on. Control starts
+      // only when the human presses 接管桌面.
+      const card = $('pc-screen-wrap');
+      if (card) card.classList.remove('takeover');
+      syncViewer(activeTarget());
+    }
     if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
     return;
   }
