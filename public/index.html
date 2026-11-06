@@ -659,6 +659,9 @@
     border-radius: 10px; padding: 8px 14px; font-size: 12.5px; cursor: pointer;
   }
   .pc-exit:hover { background: var(--accent); color: #fff; }
+
+  .key-link { color: var(--accent-2); text-decoration: none; display: inline-block; margin-top: 4px; }
+  .key-link:hover { text-decoration: underline; }
   .tabs { display: flex; align-items: center; gap: 2px; padding: 10px 10px 0; flex: none; }
   .tab {
     flex: 1; min-height: 36px; padding: 7px 4px; text-align: center;
@@ -2497,11 +2500,13 @@
           <input class="field" id="set-baseurl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" inputmode="url" />
 
           <label class="lbl" for="set-model">模型</label>
-          <input class="field" id="set-model" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+          <input class="field" id="set-model" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" list="model-suggestions" />
+          <datalist id="model-suggestions"></datalist>
 
           <label class="lbl" for="set-apikey">API 密钥</label>
           <input class="field" id="set-apikey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
           <div class="row-note" id="key-state">尚未保存密钥。</div>
+          <a class="row-note key-link" id="provider-keyurl" href="#" target="_blank" rel="noreferrer" hidden></a>
 
           <div class="btn-row">
             <button class="btn primary" id="set-save" type="submit">保存</button>
@@ -6137,11 +6142,52 @@ async function loadSettings() {
   updateModelUi();
 }
 
+/* Provider catalogue: fetched once, then used to fill the select, the model
+   suggestions and the "get a key" link. The list is static, so one fetch is all
+   it takes; a failure just leaves the two built-in options in place. */
+async function ensureProviderOptions() {
+  if (state.providers) return state.providers;
+  try {
+    const data = await api('/api/providers');
+    state.providers = data.providers || [];
+  } catch {
+    state.providers = [
+      { name: 'mock', label: '演示模式（无需密钥）', needsKey: false, models: [], baseUrl: '' },
+      { name: 'openai', label: 'OpenAI', needsKey: true, models: ['gpt-4o-mini'], baseUrl: 'https://api.openai.com/v1' },
+    ];
+  }
+  const select = $('set-provider');
+  const current = select.value;
+  select.innerHTML = state.providers
+    .map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.label)}</option>`)
+    .join('');
+  if (current) select.value = current;
+  return state.providers;
+}
+
+function renderProviderHints(provider) {
+  const preset = (state.providers || []).find((p) => p.name === provider);
+  const list = $('model-suggestions');
+  if (list) {
+    list.innerHTML = (preset?.models || []).map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
+  }
+  const link = $('provider-keyurl');
+  if (link) {
+    link.textContent = preset?.keyUrl ? `在 ${preset.label} 申请密钥 →` : '';
+    link.href = preset?.keyUrl || '#';
+    link.hidden = !preset?.keyUrl;
+  }
+  if (preset?.note) $('key-state').textContent = preset.note;
+}
+
 function renderSettingsForm() {
   const m = (state.settings && state.settings.model) || {};
   const cfg = (state.config && state.config.model) || {};
 
-  $('set-provider').value = m.provider || cfg.provider || 'mock';
+  ensureProviderOptions().finally(() => {
+    $('set-provider').value = m.provider || cfg.provider || 'mock';
+    renderProviderHints($('set-provider').value);
+  });
   $('set-baseurl').value = m.baseUrl || '';
   $('set-model').value = m.model || (cfg.provider === 'openai' ? cfg.model : '') || '';
   $('set-apikey').value = '';
@@ -7439,13 +7485,27 @@ function wireChrome() {
   $('set-clear-key').addEventListener('click', clearKey);
   $('set-provider').addEventListener('change', () => {
     const provider = $('set-provider').value;
+    const preset = (state.providers || []).find((p) => p.name === provider);
+    renderProviderHints(provider);
     if (provider === 'mock') {
       $('key-state').textContent = 'mock 不需要密钥。';
+    } else if (preset && preset.needsKey === false) {
+      $('key-state').textContent = `${preset.label} 在本机运行，不需要密钥。`;
+      if (preset.baseUrl) $('set-baseurl').value = preset.baseUrl;
+      if (!$('set-model').value && preset.models[0]) $('set-model').value = preset.models[0];
     } else {
       const m = (state.settings && state.settings.model) || {};
       $('key-state').textContent = m.hasKey ? '已保存密钥。留空表示保持不变。' : '尚未保存密钥。';
-      if (!$('set-model').value) $('set-model').value = 'gpt-4o-mini';
-      if (!$('set-baseurl').value) $('set-baseurl').value = 'https://api.openai.com/v1';
+      if (preset) {
+        if (preset.baseUrl) $('set-baseurl').value = preset.baseUrl;
+        if (!$('set-model').value && preset.models[0]) $('set-model').value = preset.models[0];
+        const link = $('provider-keyurl');
+        if (link) {
+          link.textContent = preset.keyUrl ? `在 ${preset.label} 申请密钥 →` : '';
+          link.href = preset.keyUrl || '#';
+          link.hidden = !preset.keyUrl;
+        }
+      }
       if (!$('set-apikey').value) $('set-apikey').focus();
     }
   });

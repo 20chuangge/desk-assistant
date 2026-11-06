@@ -58,6 +58,7 @@ import * as memory from './memory.mjs';
 import * as skills from './skills.mjs';
 import * as groups from './groups.mjs';
 import * as settingsModule from './settings.mjs';
+import { publicProviderCatalogue } from './providers.mjs';
 import { createProvisioner, remoteInfo } from './remote.mjs';
 import {
   evaluateAuth,
@@ -475,6 +476,10 @@ route('GET', /^\/api\/settings$/, async (_req, _res, { state }) => ({
   },
   pairing: pairingInfo(state),
 }));
+
+// Static catalogue of every model provider Desk can talk to. No secrets, so it
+// is safe for any paired device; the UI uses it to fill the settings form.
+route('GET', /^\/api\/providers$/, async () => ({ providers: publicProviderCatalogue() }));
 
 route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
   // The documented body is flat: {provider, baseUrl, model, apiKey?}.

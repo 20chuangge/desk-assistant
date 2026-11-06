@@ -23,6 +23,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { providerKind } from './providers.mjs';
+import { createAnthropicClient } from './anthropic.mjs';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -77,8 +79,12 @@ export function createModel({ provider, baseUrl, apiKey, model, timeoutMs } = {}
     };
   }
 
-  if (chosen !== 'openai') {
-    throw new Error(`Unknown ASSIST_MODEL_PROVIDER "${chosen}" (expected "mock" or "openai")`);
+  // The provider catalogue decides the wire format: Claude speaks its own
+  // protocol, everything else (/including unknown/custom names/) is assumed to
+  // be OpenAI-compatible, which is what nearly every gateway exposes.
+  const kind = providerKind(chosen);
+  if (kind === 'anthropic') {
+    return createAnthropicClient({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model, timeoutMs: cfg.timeoutMs });
   }
 
   return {

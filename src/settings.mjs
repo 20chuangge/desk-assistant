@@ -25,8 +25,10 @@
 import fsp from 'node:fs/promises';
 import { P, readJson, writeJsonAtomic } from './store.mjs';
 import { createModel } from './model.mjs';
+import { PROVIDER_NAMES, isKnownProvider, providerNeedsKey, providerPreset } from './providers.mjs';
 
-export const PROVIDERS = ['mock', 'openai'];
+/** Every provider the catalogue knows, in the order the UI lists them. */
+export const PROVIDERS = PROVIDER_NAMES;
 export const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_MODEL = 'gpt-4o-mini';
 
@@ -71,11 +73,13 @@ function mergeSettings(base, patch = {}) {
 /** Validate and normalize. Throws a 400-shaped error the HTTP layer understands. */
 export function validateSettings(input) {
   const provider = String(input?.provider ?? '').trim().toLowerCase();
-  if (!PROVIDERS.includes(provider)) {
-    throw settingsError(400, 'INVALID_PROVIDER', `provider must be one of ${PROVIDERS.join(', ')}`);
+  if (!isKnownProvider(provider)) {
+    throw settingsError(400, 'INVALID_PROVIDER', `provider must be one of ${PROVIDER_NAMES.join(', ')}`);
   }
 
-  const baseUrl = normalizeBaseUrl(input?.baseUrl);
+  // A provider with no preset URL (mock / custom) still needs something usable.
+  const preset = providerPreset(provider);
+  const baseUrl = normalizeBaseUrl(input?.baseUrl) || preset.baseUrl || DEFAULT_BASE_URL;
   let parsed;
   try {
     parsed = new URL(baseUrl);
@@ -87,7 +91,7 @@ export function validateSettings(input) {
   }
 
   const model = String(input?.model ?? '').trim();
-  if (!model) throw settingsError(400, 'INVALID_MODEL', 'model is required');
+  if (!model && provider !== 'mock') throw settingsError(400, 'INVALID_MODEL', 'model is required');
   if (model.length > 160) throw settingsError(400, 'INVALID_MODEL', 'model is limited to 160 characters');
 
   // Optional IANA zone. "" is valid ("not set yet"), but a typo must not be
@@ -170,10 +174,12 @@ export function hasKey(apiKey) {
 
 /** The provider that will actually be used for the next request. */
 export function effectiveProvider(settings, apiKey) {
-  const provider = PROVIDERS.includes(String(settings?.provider || '').toLowerCase())
+  const provider = isKnownProvider(settings?.provider)
     ? String(settings.provider).toLowerCase()
     : 'mock';
   if (provider === 'mock') return 'mock';
+  // Local runtimes (Ollama, LM Studio) need no key; everything else does.
+  if (!providerNeedsKey(provider)) return provider;
   return hasKey(apiKey) ? provider : 'mock';
 }
 
