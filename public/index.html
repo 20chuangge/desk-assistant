@@ -6894,7 +6894,8 @@ function syncViewer(target = activeTarget()) {
     const frame = document.createElement('iframe');
     frame.src = url;
     frame.setAttribute('title', `${target.name || '远程'}桌面`);
-    frame.setAttribute('allow', 'clipboard-read; clipboard-write');
+    frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
+    frame.setAttribute('allowfullscreen', '');
     frame.referrerPolicy = 'no-referrer';
     wrap.appendChild(frame);
     viewerUrl = url;

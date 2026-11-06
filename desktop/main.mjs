@@ -270,7 +270,7 @@ async function prepareHome() {
 const HUB_MODE = process.argv.includes('--hub');
 const HUB_HOST = '0.0.0.0';
 
-function startServer({ host = '127.0.0.1' } = {}) {
+function startServer({ host = '127.0.0.1', portAttempt = 'fixed' } = {}) {
   const entry = path.join(SERVER_DIR, 'src', 'server.mjs');
   if (!fs.existsSync(entry)) throw new Error(`server entry missing: ${entry}`);
 
@@ -280,7 +280,9 @@ function startServer({ host = '127.0.0.1' } = {}) {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       ASSIST_HOME: HOME,
-      PORT: process.env.PORT || '0',
+      // Fixed by default: localStorage (machine list, layout prefs) is keyed by
+      // origin, and a random port made every restart a brand-new profile.
+      PORT: process.env.PORT || (host === HUB_HOST || portAttempt === 'auto' ? '0' : '4390'),
       HOST: host,
       ...(host === HUB_HOST ? { ASSIST_ALLOW_REMOTE: '1' } : {}),
     },
@@ -312,6 +314,13 @@ function startServer({ host = '127.0.0.1' } = {}) {
 
     child.on('exit', (code, signal) => {
       if (quitting) return;
+      // Pinned port busy? Retry once on an ephemeral port.
+      if (portAttempt === 'fixed' && code !== 0) {
+        console.warn('[desk] pinned port unavailable; retrying on a free port');
+        portAttempt = 'auto';
+        startServer({ host, portAttempt: 'auto' }).then(resolve).catch(reject);
+        return;
+      }
       console.error(`[server] exited code=${code} signal=${signal}`);
       if (win && !win.isDestroyed()) {
         dialog.showErrorBox('Desk 的后台进程退出了', `退出码 ${code ?? signal}。重新打开 Desk 即可恢复；数据在：\n${HOME}`);
