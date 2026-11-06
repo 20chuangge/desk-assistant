@@ -343,7 +343,7 @@ export function createProvisioner() {
         job.message = '系统配置完成，但 6080 端口还没响应；可能需要再等半分钟或检查防火墙。';
       } else if (!vncReady) {
         job.state = 'warning';
-        job.message = 'noVNC 网页已打开，但 VNC 后端 5900 未监听，桌面仍看不到。常见于 Wayland 会话：请重启机器，在登录界面选「Ubuntu on Xorg」后重新运行。';
+        job.message = 'noVNC 网页已打开，但 VNC 后端 5900 未监听，桌面仍看不到。常见于 Wayland 会话：脚本已把默认会话固定为 Xorg，请重启机器并重新登录后重新运行。';
       } else {
         job.state = 'done';
         job.message = `远程桌面已就绪${timezone ? `（时区 ${timezone}）` : ''}。`;

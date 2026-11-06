@@ -73,6 +73,38 @@ if [ -d /etc/lightdm/lightdm.conf.d ]; then
   printf '[Seat:*]\nuser-session=ubuntu\n' > /etc/lightdm/lightdm.conf.d/50-desk-xorg.conf
 fi
 
+# --- 2b. pin an Xorg login session ------------------------------------------
+# WaylandEnable=false only affects GDM's own greeter. The session a user lands
+# in is chosen by AccountsService's Session= value; when it is empty GDM picks
+# the Wayland session, leaving x11vnc attached to a rootless Xwayland where
+# X_GetImage always fails. Pin it to the Xorg session so a fresh login works.
+step "[4.5/9] 固定登录会话为 Xorg"
+XSESSION=""
+if [ -f /usr/share/xsessions/ubuntu-xorg.desktop ]; then
+  XSESSION="ubuntu-xorg"
+elif [ -f /usr/share/xsessions/xorg.desktop ]; then
+  XSESSION="xorg"
+fi
+if [ -n "$XSESSION" ]; then
+  for uf in /var/lib/AccountsService/users/*; do
+    [ -f "$uf" ] || continue
+    case "$(basename "$uf")" in
+      gdm|nobody|root|*.desk-bak) continue ;;
+    esac
+    [ -f "${uf}.desk-bak" ] || cp -a "$uf" "${uf}.desk-bak" 2>/dev/null || true
+    if grep -q '^Session=' "$uf"; then
+      sed -i "s/^Session=.*/Session=$XSESSION/" "$uf"
+    elif grep -q '^\[User\]' "$uf"; then
+      sed -i "/^\[User\]/a Session=$XSESSION" "$uf"
+    else
+      printf '\n[User]\nSession=%s\n' "$XSESSION" >> "$uf"
+    fi
+  done
+  step "默认会话已设为 $XSESSION（原文件备份为 *.desk-bak），重启后生效"
+else
+  step "warning: 找不到 Xorg session 文件，跳过会话固定"
+fi
+
 # --- 3. VNC password + launcher ---------------------------------------------
 step "[5/9] 写入 VNC 密码与服务启动脚本"
 install -d -m 700 /etc/desk
@@ -89,21 +121,22 @@ if [ -z "$D" ]; then
 fi
 
 AUTH=""
-# Distros keep moving the greeter's Xauthority. Prefer whatever the running X
-# server was actually launched with, then fall back to the known paths.
-for p in /proc/[0-9]*; do
-  [ -r "$p/environ" ] || continue
-  candidate=$(tr '\0' '\n' < "$p/environ" 2>/dev/null | sed -n 's/^XAUTHORITY=//p' | head -1)
-  [ -n "$candidate" ] && [ -r "$candidate" ] && { AUTH="$candidate"; break; }
+# GDM/LightDM expose the greeter's Xauthority at stable paths. Try those first:
+# walking /proc/*/environ can pick up an unrelated XAUTHORITY (an app's Xwayland
+# cookie, for instance) and point x11vnc at the wrong display.
+for f in \
+  /run/user/*/gdm/Xauthority \
+  /run/user/*/lightdm/Xauthority \
+  /var/run/lightdm/root/:$D \
+  /var/lib/gdm3/.Xauthority \
+  /root/.Xauthority; do
+  [ -r "$f" ] && { AUTH="$f"; break; }
 done
 if [ -z "$AUTH" ]; then
-  for f in \
-    /run/user/*/gdm/Xauthority \
-    /run/user/*/lightdm/Xauthority \
-    /var/run/lightdm/root/:$D \
-    /var/lib/gdm3/.Xauthority \
-    /root/.Xauthority; do
-    [ -r "$f" ] && { AUTH="$f"; break; }
+  for p in /proc/[0-9]*; do
+    [ -r "$p/environ" ] || continue
+    candidate=$(tr '\0' '\n' < "$p/environ" 2>/dev/null | sed -n 's/^XAUTHORITY=//p' | head -1)
+    [ -n "$candidate" ] && [ -r "$candidate" ] && { AUTH="$candidate"; break; }
   done
 fi
 
@@ -124,7 +157,9 @@ step "[6/9] 安装 systemd 服务"
 cat > /etc/systemd/system/desk-vnc.service <<'UNIT'
 [Unit]
 Description=Desk VNC (attaches to the active Xorg display)
-After=display-manager.service graphical.target
+# Do NOT put graphical.target in After= while installing under multi-user.target:
+# systemd sees a stop ordering cycle and kills the unit right after boot.
+After=display-manager.service
 Wants=display-manager.service
 
 [Service]
@@ -134,7 +169,7 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 UNIT
 
 cat > /etc/systemd/system/desk-novnc.service <<UNIT
@@ -150,9 +185,13 @@ Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 UNIT
 
+# Older installs linked these into multi-user.target. Drop the stale links so
+# the units are pulled in once, from graphical.target only.
+rm -f /etc/systemd/system/multi-user.target.wants/desk-vnc.service \
+      /etc/systemd/system/multi-user.target.wants/desk-novnc.service
 systemctl daemon-reload
 systemctl enable desk-vnc.service desk-novnc.service
 
@@ -185,7 +224,7 @@ fi
 # already running: the login screen must be used to pick "Ubuntu on Xorg".
 if ps -eo args | grep -q '[X]wayland' && ! ps -eo args | grep -q '[/]usr/bin/Xorg'; then
   step "warning: 检测到 Wayland/Xwayland 会话且没有 Xorg；x11vnc 无法接管桌面"
-  step "warning: 请重启机器，在登录界面齿轮里选「Ubuntu on Xorg」，再重新运行本脚本"
+  step "warning: 默认会话已固定为 Xorg，请重启机器并重新登录后再运行本脚本"
 fi
 
 TIMEZONE="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
