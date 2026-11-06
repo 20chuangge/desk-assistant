@@ -2607,6 +2607,15 @@ function shanghaiWeekday(ts) {
     check('no unguarded listener wiring for removed elements', missing.length === 0, `missing: ${missing.join(', ')}`);
   }
 
+
+  // The Settings → 机器 buttons must actually be wired; "no reaction" is a bug.
+  {
+    const html = await fsp.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+    for (const id of ['set-add-machine', 'set-switch-machine']) {
+      check(`settings button ${id} is wired`, html.includes(`$('${id}')?.addEventListener`) || html.includes(`$('${id}').addEventListener`));
+    }
+  }
+
 main().catch(async (err) => {
   console.error('');
   console.error('SMOKE CRASHED:', err?.stack || err);

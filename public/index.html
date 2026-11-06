@@ -7459,6 +7459,9 @@ function wireChrome() {
   $('pc-exit').addEventListener('click', () => togglePanelMax(false));
   $('pc-target').addEventListener('change', (event) => selectTakeoverTarget(event.target.value));
   $('pc-target-add')?.addEventListener('click', () => openTargetModal(null));
+  // Settings → 机器: the only place a machine is added or switched now.
+  $('set-add-machine')?.addEventListener('click', () => { closeSettings(); openTargetModal(null); });
+  $('set-switch-machine')?.addEventListener('click', () => window.desk?.pickMachine?.());
   $('pc-target-edit').addEventListener('click', () => {
     const target = activeTarget();
     if (target.id !== 'local') openTargetModal(target);
