@@ -341,11 +341,20 @@ export function createProvisioner() {
         );
         const urlMatch = /DESK_HUB_URL=(\S+)/.exec(full.output);
         const codeMatch = /DESK_PAIR_CODE=(\d{6,10})/.exec(full.output);
+        // The script verifies its own work now; trust its verdict over "exit 0".
+        const hubOk = /DESK_HUB_OK=1/.test(full.output);
+        const desktopOk = /DESK_DESKTOP_OK=1/.test(full.output);
         job.hubUrl = urlMatch ? urlMatch[1] : `http://${host}:${hubPort}`;
         job.pairCode = codeMatch ? codeMatch[1] : '';
-        if (full.code !== 0 || !job.pairCode) {
-          const tail = full.output.trim().split(/\r?\n/).slice(-3).join(' / ') || `exit ${full.code}`;
+        job.desktopReady = desktopOk;
+        if (full.code !== 0 || !job.pairCode || !hubOk) {
+          const tail = full.output.trim().split(/\r?\n/).slice(-4).join(' / ') || `exit ${full.code}`;
           throw remoteError('REMOTE_HUB_FAILED', `Hub 部署失败：${tail}`);
+        }
+        if (!desktopOk) {
+          // Hub is fine; the bot screens will be blank until a desktop
+          // environment exists. Say so instead of reporting a clean success.
+          job.warning = 'Hub 已就绪，但这台机器没有桌面环境，Bot 桌面会是黑的';
         }
       } finally {
         cleanupPack(packed.file);

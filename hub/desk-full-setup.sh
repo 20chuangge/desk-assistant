@@ -45,7 +45,20 @@ fi
 command -v node >/dev/null 2>&1 || { echo "[desk] Node.js 安装失败" >&2; exit 1; }
 say "Node $(node -v)"
 
+DESKTOP_OK=0
 say "2/6 安装运行依赖（桌面相关失败不影响 Hub 本身）"
+apt_prepare() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  export DEBIAN_FRONTEND=noninteractive
+  # A fresh image often has an empty package index, and "install" then fails
+  # silently. Update first, tolerate mirrors that are slow.
+  apt-get update -qq >/dev/null 2>&1 || true
+}
+apt_install() {
+  # shellcheck disable=SC2086
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null 2>&1
+}
+apt_prepare
 if command -v apt-get >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb x11vnc novnc websockify >/dev/null 2>&1 || \
     echo "[desk] 警告：桌面依赖没装全，先只跑 Hub"
@@ -56,8 +69,18 @@ if command -v apt-get >/dev/null 2>&1; then
   # in ~1 min); if the machine already has GNOME the session helper uses that.
   if ! command -v xfce4-session >/dev/null 2>&1 && ! command -v gnome-session >/dev/null 2>&1; then
     say "安装桌面环境（XFCE，约 1-2 分钟）"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4 xfce4-terminal dbus-x11 >/dev/null 2>&1 || \
-      echo "[desk] 警告：桌面环境没装成，Bot 桌面会是黑屏；Hub 本身不受影响"
+    for attempt in 1 2 3; do
+      apt_install xfce4 xfce4-terminal dbus-x11 && break
+      say "桌面环境第 $attempt 次安装失败，重试"
+      apt-get update -qq >/dev/null 2>&1 || true
+      sleep 3
+    done
+  fi
+  if command -v xfce4-session >/dev/null 2>&1 || command -v gnome-session >/dev/null 2>&1; then
+    DESKTOP_OK=1
+  else
+    DESKTOP_OK=0
+    echo "[desk] 警告：桌面环境没装成，Bot 桌面会是黑屏；Hub 本身不受影响"
   fi
 fi
 
@@ -131,10 +154,26 @@ for i in $(seq 1 30); do
   fi
 done
 
+HUB_OK=0
+for i in $(seq 1 40); do
+  if (command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1) \
+     || (command -v wget >/dev/null 2>&1 && wget -q -T 2 -O /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null); then
+    HUB_OK=1
+    break
+  fi
+  sleep 1
+done
+if [ "$HUB_OK" = "0" ]; then
+  echo "[desk] Hub 没能在 ${PORT} 上应答，最近日志：" >&2
+  journalctl -u "${SERVICE}" -n 15 --no-pager >&2 2>/dev/null || true
+fi
+
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 say "6/6 完成"
 
 echo "DESK_HUB_URL=http://${IP}:${PORT}"
 echo "DESK_PAIR_CODE=${CODE:-unknown}"
 echo "DESK_APP_DIR=$APP_DIR"
+echo "DESK_HUB_OK=${HUB_OK}"
+echo "DESK_DESKTOP_OK=${DESKTOP_OK}"
 systemctl is-active ${SERVICE} || true
