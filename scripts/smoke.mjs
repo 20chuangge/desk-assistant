@@ -461,11 +461,41 @@ async function scenarioBasics() {
   check('GET / serves the UI', index.status === 200 && html.includes('<!DOCTYPE html'), `status ${index.status}`);
   check('UI is a single self-contained file (no CDN)', !/https?:\/\/cdn\.|unpkg|jsdelivr/i.test(html));
 
-  const noDeps = await fsp.stat(path.join(REPO, 'node_modules')).then(() => true).catch(() => false);
-  check('no node_modules directory exists', noDeps === false);
   const pkg = JSON.parse(await fsp.readFile(path.join(REPO, 'package.json'), 'utf8'));
-  check('package.json declares zero dependencies', !pkg.dependencies && !pkg.devDependencies);
+  const declared = Object.keys(pkg.dependencies || {});
+  const devDeclared = Object.keys(pkg.devDependencies || {});
+  // Desk used to be dependency-free. v3's one-click remote provisioning needs
+  // ssh2 at runtime, so this now guards the dependency *boundary* instead:
+  // no casual dependencies, and no devDependencies in the shipped build.
+  check(
+    'package.json declares only the approved runtime dependency',
+    declared.length === 1 && declared[0] === 'ssh2' && devDeclared.length === 0,
+    `deps=${declared.join(',')} devDeps=${devDeclared.join(',')}`,
+  );
   check('package.json is an ES module package', pkg.type === 'module');
+
+  // Walk the runtime dependency closure (optional native deps excluded) and make
+  // sure electron-builder ships every one of them next to the server. asn1's
+  // safer-buffer was missed once and broke ssh2 in packaged builds; this keeps
+  // that class of mistake from coming back.
+  const runtimeTree = new Set();
+  const walkDeps = async (name) => {
+    if (runtimeTree.has(name)) return;
+    runtimeTree.add(name);
+    let meta;
+    try {
+      meta = JSON.parse(await fsp.readFile(path.join(REPO, 'node_modules', name, 'package.json'), 'utf8'));
+    } catch { return; }
+    for (const child of Object.keys(meta.dependencies || {})) await walkDeps(child);
+  };
+  for (const name of declared) await walkDeps(name);
+  const builderYml = await fsp.readFile(path.join(REPO, 'desktop', 'electron-builder.yml'), 'utf8');
+  const notShipped = [...runtimeTree].filter((name) => !builderYml.includes(`from: ../node_modules/${name}`));
+  check(
+    'desktop package ships the full runtime dependency tree',
+    notShipped.length === 0,
+    `missing from extraResources: ${notShipped.join(', ')}`,
+  );
 }
 
 async function scenarioBots() {

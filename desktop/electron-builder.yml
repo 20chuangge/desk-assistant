@@ -32,8 +32,9 @@ extraResources:
     to: server/workspace
   - from: ../hub
     to: server/hub
-  # ssh2 is pure JS when cpu-features is absent; keep its runtime deps next to
-  # it so `node resources/server/src/server.mjs` can resolve them.
+  # ssh2 is pure JS when cpu-features is absent; keep its whole runtime tree
+  # next to it so `node resources/server/src/server.mjs` can resolve them.
+  # asn1 requires safer-buffer at load time -- do not drop it from this list.
   - from: ../node_modules/ssh2
     to: server/node_modules/ssh2
   - from: ../node_modules/asn1
@@ -42,6 +43,8 @@ extraResources:
     to: server/node_modules/bcrypt-pbkdf
   - from: ../node_modules/tweetnacl
     to: server/node_modules/tweetnacl
+  - from: ../node_modules/safer-buffer
+    to: server/node_modules/safer-buffer
   - from: ../package.json
     to: server/package.json
 
