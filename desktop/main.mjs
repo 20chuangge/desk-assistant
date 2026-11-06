@@ -104,7 +104,9 @@ function rememberMachine(url) {
 /** Native picker: each machine keeps its own bots, so this is the switcher. */
 async function pickMachine() {
   const list = readMachines();
+  const localActive = !remoteHub;
   const buttons = [
+    `${localActive ? '● ' : ''}本机（这台电脑）`,
     ...list.map((m) => `${m.name === remoteHub ? '● ' : ''}${m.name}`),
     '添加新机器…',
     '取消',
@@ -119,12 +121,19 @@ async function pickMachine() {
     cancelId: buttons.length - 1,
     noLink: true,
   });
-  if (response === buttons.length - 1) return;
-  if (response === buttons.length - 2) {
+  if (response === buttons.length - 1) return;          // 取消
+  if (response === buttons.length - 2) {                // 添加新机器…
     await switchHub();
     return;
   }
-  const target = list[response];
+  if (response === 0) {                                 // 本机（这台电脑）
+    if (!remoteHub) return;
+    clearHub();
+    app.relaunch();
+    app.exit(0);
+    return;
+  }
+  const target = list[response - 1];
   if (!target || target.url === remoteHub) return;
   writeHub(target.url);
   rememberMachine(target.url);
