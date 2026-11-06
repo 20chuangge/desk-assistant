@@ -957,7 +957,10 @@ route('GET', /^\/api\/computer$/, async (req, _res, { state, query }) => {
 
   // Bot-scoped desktops: when ?botId= is given and that bot has its own X
   // display, the viewer must show THAT desktop, not the machine's shared one.
-  const botId = String(query?.get?.('botId') || '').trim();
+  let botId = String(query?.get?.('botId') || '').trim();
+  if (!botId && desktopSupport().available && state.config?.primaryBotId) {
+    botId = state.config.primaryBotId;
+  }
   let perBot = null;
   if (botId) {
     try {
@@ -980,7 +983,7 @@ route('GET', /^\/api\/computer$/, async (req, _res, { state, query }) => {
       vncPass = JSON.parse(fs.readFileSync(path.join(P.dataDir, 'vnc.json'), 'utf8')).password || '';
     } catch { /* not configured */ }
   }
-  if (vncPass && snap.desktop?.url) {
+  if (vncPass && snap.desktop?.url && !snap.desktop.perBot) {
     snap.desktop.url += `&password=${encodeURIComponent(vncPass)}`;
     snap.desktop.hasPassword = true;
   }

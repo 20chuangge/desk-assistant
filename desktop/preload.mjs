@@ -6,6 +6,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('desk', {
   setHub: (url) => ipcRenderer.invoke('desk:set-hub', url),
+  pickMachine: () => ipcRenderer.invoke('desk:pick-machine'),
   current: () => ipcRenderer.invoke('desk:current-hub'),
   useLocal: () => ipcRenderer.invoke('desk:use-local'),
 });

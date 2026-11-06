@@ -767,6 +767,14 @@
     margin: 0 0 var(--s3); min-height: 14px;
   }
   .pc-target-hint { color: var(--dim); font-size: 11px; }
+
+  /* The panel is a screen viewer, not a dashboard: host stats, process list and
+     the redundant hint line stay out of the way. */
+  #pc-stats,
+  #pc-procs,
+  #pc-procs-head,
+  #pc-target-hint,
+  #pc-local-note { display: none !important; }
   .pc-link {
     border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer;
     padding: 0; text-decoration: underline; text-underline-offset: 2px;
@@ -2373,7 +2381,12 @@
 
         <div class="pane" id="pane-computer" role="tabpanel">
           <div class="pc-target-bar">
-            <span class="pc-target-label">接管</span>
+            <span class="pc-target-label">Bot 运行在</span>
+            <span class="pc-target-hint" id="bot-host-hint">本机</span>
+            <button class="btn tiny" id="bot-host-switch" type="button" hidden>切换机器</button>
+          </div>
+          <div class="pc-target-bar" style="margin-top:6px">
+            <span class="pc-target-label">看谁的屏幕</span>
             <select class="field pc-target-select" id="pc-target" aria-label="选择要接管的机器"></select>
             <button class="btn tiny" id="pc-target-add" type="button">+ 机器</button>
           </div>
@@ -6481,6 +6494,13 @@ async function loadComputer() {
     return;
   }
   state.computer = data;
+  if (data.desktop?.perBot && data.desktop?.url) {
+    const wrap = $('pc-vnc-wrap');
+    const current = wrap?.querySelector('iframe')?.getAttribute('src') || '';
+    if (current !== data.desktop.url) openDesktopViewer();
+    if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
+    return;
+  }
   const rows = [
     ['主机', `${data.host.platform === 'win32' ? 'Windows' : data.host.platform} · ${data.host.release}`],
     ['主机名', data.host.hostname],
@@ -6508,6 +6528,7 @@ async function loadComputer() {
 
 let screenTimer = null;
 async function refreshScreen() {
+  if (state.computer?.desktop?.perBot) return;   // live view is already embedded
   const img = $('pc-screen');
   const note = $('pc-screen-note');
   if (!img) return;
@@ -6668,7 +6689,10 @@ function targetLabel(t) {
 function syncTargetBranding() {
   const target = activeTarget();
   const remote = target.id !== 'local';
-  const sub = remote ? target.name : '本机模式';
+  const onHub = !/^(https?:\/\/)?(127\.0\.0\.1|localhost|\[\]|\[::1\])(:|\/|$)/.test(location.origin);
+  const sub = onHub
+    ? `远程 Hub · ${state.computer?.host?.hostname || location.hostname}`
+    : (remote ? target.name : '本机模式');
   if ($('side-account-sub')) $('side-account-sub').textContent = sub;
   if ($('am-sub')) $('am-sub').textContent = remote ? `接管：${target.name}` : '本机模式 · 数据在这台电脑';
   if ($('about-origin')) {
@@ -6716,13 +6740,13 @@ function viewerUrlFor({ host, port = 6080, password = '', encrypted = false }) {
 
 function targetViewerUrl(t) {
   if (t.id === 'local') {
-    let password = '';
-    try {
-      const raw = new URL(state.computer?.desktop?.url || '');
-      password = raw.searchParams.get('password') || '';
-    } catch { /* not loaded yet */ }
+    // The hub tells us which screen "this machine" means RIGHT NOW: a bot's own
+    // display (:120 -> port 6100, no password) or the shared one (6080). Hard
+    // coding 6080 here was why the panel showed the machine's login screen.
+    const url = state.computer?.desktop?.url;
+    if (url) return url;
     const host = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? '127.0.0.1' : location.hostname;
-    return viewerUrlFor({ host, port: 6080, password });
+    return viewerUrlFor({ host, port: 6080, password: '' });
   }
   return viewerUrlFor({
     host: t.host,
@@ -6732,17 +6756,50 @@ function targetViewerUrl(t) {
   });
 }
 
+/* Where the BOTS live is a different question from whose screen you are
+   watching. Saying both out loud prevents the "本机模式 but I see Ubuntu"
+   confusion: the panel can show a remote screen while the bots run here. */
+function renderBotHost() {
+  const hint = $('bot-host-hint');
+  if (!hint) return;
+  const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(location.origin);
+  if (local) {
+    hint.textContent = '本机（Bot 和浏览器都在这台电脑上）';
+  } else {
+    hint.textContent = `远程 Hub · ${location.hostname}`;
+  }
+  const btn = $('bot-host-switch');
+  if (btn) {
+    const canPick = typeof window.desk?.pickMachine === 'function';
+    btn.hidden = !canPick;
+    if (canPick && !btn.dataset.wired) {
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', () => window.desk.pickMachine());
+    }
+  }
+}
+
+/** What "this machine" means right now: the hub's box, or the laptop itself. */
+function localScreenLabel() {
+  const hostname = state.computer?.host?.hostname || '';
+  const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(location.origin);
+  if (local) return '这台电脑（本机）';
+  return hostname ? `这台 Hub 的机器（${hostname}）` : '这台 Hub 的机器';
+}
+
 function renderTargetPicker() {
+  renderBotHost();
   const select = $('pc-target');
   if (!select) return;
   const active = activeTarget();
   select.innerHTML = [
-    '<option value="local">这台电脑（本机）</option>',
+    `<option value="local">${escapeHtml(localScreenLabel())}</option>`,
     ...readTargets().map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.host)}</option>`),
   ].join('');
   select.value = active.id;
   if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
   applyTargetMode(active);
+  syncViewer(active);
 }
 
 /** Swap the screenshot card for the live remote view, or back. */

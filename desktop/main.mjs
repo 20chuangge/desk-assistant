@@ -497,6 +497,12 @@ ipcMain.on('shell:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
+// The UI asks for the machine picker so "切换机器" is one click from the panel.
+ipcMain.handle('desk:pick-machine', async () => {
+  await pickMachine();
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------------------
 // lifecycle
 // ---------------------------------------------------------------------------

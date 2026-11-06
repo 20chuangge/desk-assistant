@@ -83,6 +83,23 @@ async function passwordFile() {
   return file;
 }
 
+/** Best effort: pkill anything left over from a previous hub process. */
+function childLog(botId, name) {
+  try {
+    const dir = path.join(dataDir || process.cwd(), 'desktop-logs');
+    fs.mkdirSync(dir, { recursive: true });
+    return fs.openSync(path.join(dir, `${botId}-${name}.log`), 'a');
+  } catch {
+    return 'ignore';
+  }
+}
+
+function killByPattern(pattern) {
+  try {
+    spawnSync('pkill', ['-f', pattern], { stdio: 'ignore' });
+  } catch { /* pkill missing: the bind will fail loudly instead */ }
+}
+
 function stableIndex(botId) {
   if (indexByBot.has(botId)) return indexByBot.get(botId);
   const used = new Set(indexByBot.values());
@@ -121,33 +138,87 @@ export async function ensureDesktop(botId) {
 
   const existing = desktops.get(botId);
   if (existing) {
-    return { ...publicInfo(botId, existing), started: false };
+    // The map is only a cache: the processes can be gone (killed by hand, OOM,
+    // a host restart). A stale entry would hand the UI a dead viewer URL.
+    const alive = existing.procs.every((proc) => !proc.killed && proc.exitCode === null)
+      && (await portOpen(existing.vncPort))
+      && (await portOpen(existing.webPort));
+    if (alive) return { ...publicInfo(botId, existing), started: false };
+    for (const proc of existing.procs) {
+      try { proc.kill(); } catch { /* already gone */ }
+    }
+    desktops.delete(botId);
   }
 
+  for (const pattern of ['Xvfb :' + (BASE_DISPLAY + stableIndex(botId)), 'x11vnc -display :' + (BASE_DISPLAY + stableIndex(botId))]) {
+    killByPattern(pattern);
+  }
   const index = stableIndex(botId);
+  killByPattern(`websockify --web=/usr/share/novnc ${BASE_WEB_PORT + index}`);
   const display = BASE_DISPLAY + index;
   const vncPort = BASE_VNC_PORT + index;
   const webPort = BASE_WEB_PORT + index;
   const procs = [];
 
+  // A killed Xvfb leaves /tmp/.X<N>-lock behind and the next one refuses to
+  // start ("server is already active"), which shows up as a black viewer.
+  try { fs.rmSync(`/tmp/.X${display}-lock`, { force: true }); } catch { /* fine */ }
+  try { fs.rmSync(`/tmp/.X11-unix/X${display}`, { force: true }); } catch { /* fine */ }
+
   // 1) the virtual display
   procs.push(spawn('Xvfb', [`:${display}`, '-screen', '0', '1400x900x24', '-nolisten', 'tcp'], {
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', childLog(botId, 'xvfb'), childLog(botId, 'xvfb')],
     detached: false,
   }));
   for (let i = 0; i < 40 && !displayReady(display); i += 1) await sleep(100);
 
+  // A bare Xvfb is a black rectangle. Run a real session: XFCE when it is
+  // installed (looks like a desktop), otherwise a window manager + terminal.
+  const sessionEnv = {
+    ...process.env,
+    DISPLAY: `:${display}`,
+    XDG_SESSION_TYPE: 'x11',
+    XDG_CURRENT_DESKTOP: 'XFCE',
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`,
+  };
+  const have = (bin) => {
+    try { return spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).status === 0; }
+    catch { return false; }
+  };
+  if (fs.existsSync('/usr/local/bin/desk-bot-session')) {
+    procs.push(spawn('/usr/local/bin/desk-bot-session', [String(display)], {
+      stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
+      env: sessionEnv,
+    }));
+    await sleep(1500);
+  } else if (have('xfce4-session') && have('dbus-launch')) {
+    procs.push(spawn('dbus-launch', ['--exit-with-session', 'xfce4-session'], {
+      stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
+      env: sessionEnv,
+    }));
+    await sleep(1200);
+  } else {
+    for (const [bin, argv] of [['openbox', []], ['xterm', ['-fa', 'Monospace', '-fs', '11']]]) {
+      if (!have(bin)) continue;
+      procs.push(spawn(bin, argv, {
+        stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
+        env: sessionEnv,
+      }));
+      await sleep(300);
+    }
+  }
+
   // 2) VNC server on that display, localhost only
-  const args = ['-display', `:${display}`, '-localhost', '-forever', '-shared', '-noxdamage', '-repeat', '-noshm', '-rfbport', String(vncPort)];
-  const passFile = await passwordFile();
-  if (passFile) args.push('-rfbauth', passFile);
-  else args.push('-nopw');
-  procs.push(spawn('x11vnc', args, { stdio: ['ignore', 'ignore', 'ignore'] }));
+  // No VNC password on purpose: the display is bound to 127.0.0.1 and each bot
+  // has its own websockify bridge, so "type a password to see your own bot"
+  // would be friction with no real protection.
+  const args = ['-display', `:${display}`, '-localhost', '-nopw', '-forever', '-shared', '-noxdamage', '-repeat', '-noshm', '-rfbport', String(vncPort)];
+  procs.push(spawn('x11vnc', args, { stdio: ['ignore', childLog(botId, 'vnc'), childLog(botId, 'vnc')] }));
   for (let i = 0; i < 50 && !(await portOpen(vncPort)); i += 1) await sleep(100);
 
   // 3) noVNC bridge for that one display
   procs.push(spawn('websockify', ['--web=/usr/share/novnc', String(webPort), `127.0.0.1:${vncPort}`], {
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', childLog(botId, 'web'), childLog(botId, 'web')],
   }));
   for (let i = 0; i < 50 && !(await portOpen(webPort)); i += 1) await sleep(100);
 
