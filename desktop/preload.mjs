@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('desk', {
   setHub: (url) => ipcRenderer.invoke('desk:set-hub', url),
   pickMachine: () => ipcRenderer.invoke('desk:pick-machine'),
   switchHub: (url) => ipcRenderer.invoke('desk:switch-hub', url),
+  listMachines: () => ipcRenderer.invoke('desk:list-machines'),
+  useLocal: () => ipcRenderer.invoke('desk:use-local'),
   current: () => ipcRenderer.invoke('desk:current-hub'),
   useLocal: () => ipcRenderer.invoke('desk:use-local'),
 });

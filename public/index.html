@@ -2558,11 +2558,11 @@
         <div class="dsec-hint">
           一台机器就是一个独立的 Desk：它有自己的 Bot、记忆和工作区。切换机器后整窗重载，互不混淆。
         </div>
-        <div class="row-actions">
-          <button class="btn primary tiny" id="set-add-machine" type="button">添加机器（SSH 自动配置）</button>
+        <div class="machine-list" id="set-machines-list"></div>
+        <div class="row-actions" style="margin-top:10px">
+          <button class="btn primary tiny" id="set-add-machine" type="button">添加机器</button>
           <button class="btn tiny" id="set-switch-machine" type="button">切换机器…</button>
         </div>
-        <div class="dsec-hint" id="set-machines-list"></div>
       </section>
 
       <section class="dsec" id="sec-appearance">
@@ -6964,21 +6964,69 @@ function fillZoneSelect(select, current) {
   select.value = current || '';
 }
 
-/** One line per machine in Settings: what is configured and where it lives. */
-function renderMachinesList() {
+/** The machine list: one row each, current one marked, click to switch. */
+async function renderMachinesList() {
   const box = $('set-machines-list');
   if (!box) return;
-  const targets = readTargets();
-  const onHub = (() => {
-    const origin = location.origin;
-    return !/^http:\/\/(127\.0\.0\.1|localhost):/.test(origin);
-  })();
-  const host = state.computer?.host?.hostname || (location.hostname === '127.0.0.1' ? '本机' : location.hostname);
-  const lines = [
-    `<div>当前 Bot 宿主：<b>${escapeHtml(onHub ? `远程 Hub · ${host}` : '本机（这台电脑）')}</b></div>`,
-    ...targets.map((t) => `<div>${escapeHtml(t.name || t.host)} · ${escapeHtml(t.host)}</div>`),
-  ];
-  box.innerHTML = lines.join('');
+  const onHub = !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(location.origin);
+  const host = state.computer?.host?.hostname || location.hostname;
+
+  let bridge = null;
+  try { bridge = await window.desk?.listMachines?.(); } catch { /* browser: no bridge */ }
+
+  if (!bridge) {
+    box.innerHTML = `<div class="machine-empty">当前：${escapeHtml(onHub ? `远程 Hub · ${host}` : '本机（这台电脑）')}（浏览器里无法列机器，请在 Desk 客户端里管理）</div>`;
+    return;
+  }
+
+  const rows = [];
+  rows.push(`
+    <div class="machine-row ${bridge.local ? 'current' : ''}">
+      <div class="machine-avatar">D</div>
+      <div class="machine-meta">
+        <div class="machine-name">本机（这台电脑）</div>
+        <div class="machine-sub">Bot 和浏览器都在这台电脑上</div>
+      </div>
+      ${bridge.local ? '<span class="machine-tag">当前</span>' : '<button class="btn tiny" data-switch-local="1">切到这里</button>'}
+    </div>`);
+
+  for (const machine of bridge.machines || []) {
+    const isCurrent = bridge.current && machine.url === bridge.current;
+    rows.push(`
+      <div class="machine-row ${isCurrent ? 'current' : ''}">
+        <div class="machine-avatar">${escapeHtml((machine.name || '?').slice(0, 1).toUpperCase())}</div>
+        <div class="machine-meta">
+          <div class="machine-name">${escapeHtml(machine.name || machine.url)}</div>
+          <div class="machine-sub">${escapeHtml(machine.url)}</div>
+        </div>
+        ${isCurrent ? '<span class="machine-tag">当前</span>' : `<button class="btn tiny" data-switch-url="${escapeHtml(machine.url)}">切到这里</button>`}
+      </div>`);
+  }
+  if (!(bridge.machines || []).length && bridge.local) {
+    rows.push('<div class="machine-empty">还没有添加过别的机器。点下面的「添加机器」，填 SSH 信息就能自动装一台。</div>');
+  }
+  box.innerHTML = rows.join('');
+
+  box.querySelectorAll('[data-switch-url]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const url = btn.getAttribute('data-switch-url');
+      btn.disabled = true;
+      btn.textContent = '切换中…';
+      const res = await window.desk.switchHub(url);
+      if (!res?.ok) {
+        btn.disabled = false;
+        btn.textContent = '切换失败，重试';
+        if (res?.error) toast?.(res.error);
+      }
+    });
+  });
+  box.querySelectorAll('[data-switch-local]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = '切换中…';
+      await window.desk.useLocal();
+    });
+  });
 }
 
 function openTargetModal(target) {

@@ -517,6 +517,18 @@ ipcMain.on('shell:close', (event) => {
 
 // Switch the whole client to another hub and relaunch: this is what "把 Bot
 // 也放到那台机器上" means, and it is different from only viewing a screen.
+ipcMain.handle('desk:list-machines', () => ({
+  current: remoteHub || '',
+  local: !remoteHub,
+  machines: readMachines(),
+}));
+
+ipcMain.handle('desk:use-local', () => {
+  clearHub();
+  setTimeout(() => { app.relaunch(); app.exit(0); }, 50);
+  return { ok: true };
+});
+
 ipcMain.handle('desk:switch-hub', async (_event, url) => {
   const target = normalizeHub(url);
   if (!target) return { ok: false, error: '地址格式不对' };
