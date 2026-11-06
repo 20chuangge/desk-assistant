@@ -280,8 +280,9 @@ export function createProvisioner() {
 
   async function run(job, options) {
     const {
-      host, sshPort, username, password, vncPassword, webPort, hubPort,
+      host, sshPort, username, password, vncPassword, webPort,
     } = options;
+    const hubPort = Number(options.hubPort) > 0 ? Number(options.hubPort) : 4390;
     let client = null;
     try {
       setProgress(job, '正在连接 SSH…');
@@ -426,7 +427,7 @@ export function createProvisioner() {
       if (!reachable) {
         job.state = 'warning';
         job.message = '系统配置完成，但 6080 端口还没响应；可能需要再等半分钟或检查防火墙。';
-      } else if (!vncReady) {
+      } else if (!vncReady && !job.hubUrl) {
         job.state = 'warning';
         job.message = 'noVNC 网页已打开，但 VNC 后端 5900 未监听，桌面仍看不到。常见于 Wayland 会话：脚本已把默认会话固定为 Xorg，请重启机器并重新登录后重新运行。';
       } else {
