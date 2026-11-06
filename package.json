@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node src/server.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:remote-mock": "node scripts/smoke-remote-mock.mjs",
+    "verify:remote": "node scripts/verify-remote-setup.mjs",
     "desktop": "electron desktop",
     "desktop:icons": "node desktop/make-icons.mjs",
     "desktop:build": "npm --prefix desktop run build:win",
