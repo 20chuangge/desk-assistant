@@ -168,8 +168,12 @@ export function browserSupport() {
   return { supported: true, transport: typeof globalThis.WebSocket === 'function' ? 'native' : 'shim' };
 }
 
-export function profileDir() {
-  return path.join(P.dataDir, 'browser-profile');
+export function profileDir(key = '') {
+  // One profile per bot: cookies and logins must not leak between bots that are
+  // supposed to be separate assistants on separate desktops.
+  if (!key) return path.join(P.dataDir, 'browser-profile');
+  const safe = String(key).replace(/[^a-zA-Z0-9_-]/g, '');
+  return path.join(P.dataDir, 'browser-profiles', safe || 'bot');
 }
 
 function stateFile() {
@@ -528,7 +532,10 @@ function ensureExitHook() {
 }
 
 class BrowserManager {
-  constructor() {
+  /** @param {{key?: string}} [options] key scopes the profile dir (one per bot) */
+  constructor({ key = '' } = {}) {
+    /** Which bot owns this browser; '' is the shared/legacy instance. */
+    this.key = key;
     /** @type {null | {port:number,pid:number,child:object|null,exe:string,headless:boolean,adopted:boolean,browser:CdpConnection,page:CdpConnection,inFlight:number,lastActivity:number,pageUrl:string}} */
     this.session = null;
     this.launching = null;
@@ -576,14 +583,25 @@ class BrowserManager {
 
     const port = await findFreePort();
     const headless = process.env.BROWSER_HEADLESS === '1';
-    const profile = profileDir();
+    const profile = profileDir(this.key);
     await fsp.mkdir(profile, { recursive: true });
+
+    // On a Linux hub with per-bot desktops, the window must appear on THIS
+    // bot's X display; otherwise every bot would paint on the same screen.
+    let display = '';
+    if (!headless && process.platform === 'linux') {
+      try {
+        const { desktopEnv } = await import('./desktops.mjs');
+        display = desktopEnv(this.key)?.DISPLAY || '';
+      } catch { /* desktops unavailable: fall back to the inherited display */ }
+    }
 
     const args = buildLaunchArgs({ port, profileDir: profile, headless });
     let stderr = '';
     const child = spawn(executable.path, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
+      env: display ? { ...process.env, DISPLAY: display } : process.env,
     });
     child.stderr?.on('data', (chunk) => {
       stderr = `${stderr}${chunk.toString('utf8')}`.slice(-4000);
@@ -621,6 +639,9 @@ class BrowserManager {
       exe: executable.path,
       headless,
       adopted: false,
+      display,
+      profile,
+      key: this.key,
       browser,
       page,
       pageUrl: 'about:blank',
@@ -865,7 +886,12 @@ class BrowserManager {
           pid: session.pid,
           headless: session.headless,
           adopted: session.adopted,
-          profile: profileDir(),
+          profile: session.profile || profileDir(this.key),
+          // Which machine/display this browser is actually painting on. Without
+          // it a bot cannot tell the user whether it is on the hub or the laptop.
+          host: process.env.HOSTNAME || os.hostname(),
+          display: session.display || process.env.DISPLAY || (process.platform === 'win32' ? 'win32' : ''),
+          botId: this.key || null,
         },
       };
     } catch (err) {
@@ -1359,14 +1385,25 @@ function browserFailure(err) {
 // ---------------------------------------------------------------------------
 
 let manager = null;
+const managers = new Map();
 
 /**
- * One browser per server process. Tool calls reuse the same page, which is what
- * lets "snapshot then click @e3" work inside a single turn.
+ * One browser per bot. Tool calls reuse the same page, which is what lets
+ * "snapshot then click @e3" work inside a single turn. Separate bots get
+ * separate browsers on separate desktops, so bot A can never see bot B's tabs.
  */
-export function getBrowserManager() {
-  if (!manager) manager = new BrowserManager();
-  return manager;
+export function getBrowserManager(key = '') {
+  if (!key) {
+    if (!manager) manager = new BrowserManager();
+    return manager;
+  }
+  if (!managers.has(key)) managers.set(key, new BrowserManager({ key }));
+  return managers.get(key);
+}
+
+/** All live managers, for status endpoints and shutdown. */
+export function browserManagers() {
+  return [...(manager ? [manager] : []), ...managers.values()];
 }
 
 export { BrowserManager, CdpConnection };

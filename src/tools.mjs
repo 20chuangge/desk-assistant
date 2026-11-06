@@ -450,7 +450,7 @@ export function createRegistry(deps) {
   // One browser session per process (a singleton), so a snapshot and the click
   // that uses one of its refs hit the same page inside a single turn.
 
-  const browserManager = () => getBrowserManager();
+  const browserManager = (ctx) => getBrowserManager(ctx?.bot?.id || '');
 
   add({
     name: 'browser_open',
@@ -464,7 +464,15 @@ export function createRegistry(deps) {
       required: ['url'],
       additionalProperties: false,
     },
-    run: (args) => browserManager().open(args),
+    run: async (args, ctx) => {
+      // On a Linux hub with per-bot desktops, the window must open on THIS
+      // bot's display, so make sure the display exists before Chrome starts.
+      try {
+        const { desktopSupport, ensureDesktop } = await import('./desktops.mjs');
+        if (desktopSupport().available && ctx?.bot?.id) await ensureDesktop(ctx.bot.id);
+      } catch { /* fall back to the shared desktop */ }
+      return browserManager(ctx).open(args);
+    },
   });
 
   add({
@@ -474,7 +482,7 @@ export function createRegistry(deps) {
       'Each element looks like {ref:"@e3", tag, role, name, visible}. Always snapshot before clicking or typing; refs from an older page state fail with STALE_REF, so take a new snapshot after the page changes.',
     risk: RISK.LOW,
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    run: () => browserManager().snapshot(),
+    run: (_args, ctx) => browserManager(ctx).snapshot(),
   });
 
   add({
@@ -491,7 +499,7 @@ export function createRegistry(deps) {
       },
       additionalProperties: false,
     },
-    run: (args) => browserManager().click(args),
+    run: (args, ctx) => browserManager(ctx).click(args),
   });
 
   add({
@@ -511,7 +519,7 @@ export function createRegistry(deps) {
       required: ['text'],
       additionalProperties: false,
     },
-    run: (args) => browserManager().type(args),
+    run: (args, ctx) => browserManager(ctx).type(args),
   });
 
   add({
@@ -525,7 +533,7 @@ export function createRegistry(deps) {
       properties: { path: { type: 'string', description: 'Optional workspace-relative PNG path.' } },
       additionalProperties: false,
     },
-    run: (args, ctx) => browserManager().screenshot(args, ctx),
+    run: (args, ctx) => browserManager(ctx).screenshot(args, ctx),
   });
 
   add({
@@ -543,7 +551,7 @@ export function createRegistry(deps) {
       required: ['url'],
       additionalProperties: false,
     },
-    run: (args, ctx) => browserManager().download(args, ctx),
+    run: (args, ctx) => browserManager(ctx).download(args, ctx),
   });
 
   add({
@@ -558,7 +566,7 @@ export function createRegistry(deps) {
       required: ['expression'],
       additionalProperties: false,
     },
-    run: (args) => browserManager().evaluate(args),
+    run: (args, ctx) => browserManager(ctx).evaluate(args),
   });
 
   add({
@@ -566,7 +574,7 @@ export function createRegistry(deps) {
     description: 'Close the browser process this installation is driving. The saved profile stays on disk, so the next run keeps its logins.',
     risk: RISK.LOW,
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    run: () => browserManager().close(),
+    run: (_args, ctx) => browserManager(ctx).close(),
   });
 
   add({
@@ -574,7 +582,7 @@ export function createRegistry(deps) {
     description: 'Report whether a browser is running, its pid, profile directory, CDP url and which executable was detected. Use it to check the setup before trying to drive a page.',
     risk: RISK.LOW,
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    run: () => browserManager().status(),
+    run: (_args, ctx) => browserManager(ctx).status(),
   });
 
   // --- memory -------------------------------------------------------------

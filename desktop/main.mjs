@@ -524,11 +524,17 @@ if (!gotLock) {
       }
 
       // A hub is either explicitly requested (env) or remembered from last time.
-      // If it does not answer, fall back to a local instance instead of showing
-      // a dead window — the menu can retry.
+      // If it does not answer we ASK. Silently falling back to a local instance
+      // is how a bot ends up opening the laptop's Chrome while the human thinks
+      // they are driving the VM — the two machines are not interchangeable.
       const candidate = normalizeHub(process.env.DESK_HUB_URL || '') || readHub();
       if (candidate && !DEV_URL) {
-        if (await probeHub(candidate)) {
+        let reachable = await probeHub(candidate);
+        for (let attempt = 0; !reachable && attempt < 2; attempt += 1) {
+          await new Promise((r) => setTimeout(r, 1500));
+          reachable = await probeHub(candidate);
+        }
+        if (reachable) {
           remoteHub = candidate;
           rememberMachine(candidate);
           console.log(`[desk] remote mode → ${candidate}`);
@@ -537,7 +543,42 @@ if (!gotLock) {
           createTray();
           return;
         }
-        console.warn(`[desk] hub ${candidate} unreachable; starting a local instance instead`);
+        const { response } = await dialog.showMessageBox({
+          type: 'warning',
+          title: '连不上这台机器',
+          message: `连不上 ${candidate}`,
+          detail:
+            'Desk 不会自动改成本机模式——那样 Bot 会跑到这台电脑上运行，而不是你选的那台机器。\n\n'
+            + '· 重试：再试一次连接（建议先确认那台机器开着、Hub 服务在跑）\n'
+            + '· 用本机模式：明确使用这台电脑上的 Bot 和浏览器\n'
+            + '· 退出：先不管',
+          buttons: ['重试', '用本机模式', '退出'],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+        });
+        if (response === 2) {
+          app.quit();
+          return;
+        }
+        if (response === 0) {
+          let ok = false;
+          for (let attempt = 0; attempt < 3 && !ok; attempt += 1) ok = await probeHub(candidate);
+          if (ok) {
+            remoteHub = candidate;
+            rememberMachine(candidate);
+            console.log(`[desk] remote mode → ${candidate} (after retry)`);
+            buildMenu();
+            createWindowFor(candidate);
+            createTray();
+            return;
+          }
+          dialog.showErrorBox('还是连不上', `连不上 ${candidate}。\n\n先启动那台机器上的 Hub（desk-hub 服务），再重新打开 Desk。`);
+          app.quit();
+          return;
+        }
+        // Explicit "use this machine": drop the hub for this run only.
+        console.warn(`[desk] user chose local mode; hub ${candidate} will be retried next launch`);
       }
 
       let port;
