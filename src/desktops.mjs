@@ -45,6 +45,12 @@ function hasBinary(bin) {
 
 /** Whether per-bot desktops can work on this machine at all. */
 export function desktopSupport() {
+  // Escape hatch: per-bot desktops spawn X/DBus/session managers inside the hub
+  // process, which is fine on some hosts and fatal on others. DESK_PER_BOT_DESKTOPS=0
+  // falls back to the machine's single desktop while that is investigated.
+  if (process.env.DESK_PER_BOT_DESKTOPS === '0') {
+    return { available: false, reason: 'per-bot desktops disabled by DESK_PER_BOT_DESKTOPS=0' };
+  }
   if (process.platform !== 'linux') {
     return { available: false, reason: 'per-bot desktops need Linux (Xvfb + x11vnc)' };
   }
@@ -92,6 +98,18 @@ function childLog(botId, name) {
   } catch {
     return 'ignore';
   }
+}
+
+/** spawn() that never lets a child error crash the hub (EACCES/ENOENT). */
+function spawnChild(cmd, args, options = {}) {
+  let child;
+  try {
+    child = spawn(cmd, args, options);
+  } catch (err) {
+    return { killed: false, exitCode: -1, failed: String(err.message) };
+  }
+  child.on('error', () => { /* logged by absence of the process; never fatal */ });
+  return child;
 }
 
 function killByPattern(pattern) {
@@ -166,7 +184,7 @@ export async function ensureDesktop(botId) {
   try { fs.rmSync(`/tmp/.X11-unix/X${display}`, { force: true }); } catch { /* fine */ }
 
   // 1) the virtual display
-  procs.push(spawn('Xvfb', [`:${display}`, '-screen', '0', '1400x900x24', '-nolisten', 'tcp'], {
+  procs.push(spawnChild('Xvfb', [`:${display}`, '-screen', '0', '1400x900x24', '-nolisten', 'tcp'], {
     stdio: ['ignore', childLog(botId, 'xvfb'), childLog(botId, 'xvfb')],
     detached: false,
   }));
@@ -186,13 +204,13 @@ export async function ensureDesktop(botId) {
     catch { return false; }
   };
   if (fs.existsSync('/usr/local/bin/desk-bot-session')) {
-    procs.push(spawn('/usr/local/bin/desk-bot-session', [String(display)], {
+    procs.push(spawnChild('/usr/local/bin/desk-bot-session', [String(display)], {
       stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
       env: sessionEnv,
     }));
     await sleep(1500);
   } else if (have('xfce4-session') && have('dbus-launch')) {
-    procs.push(spawn('dbus-launch', ['--exit-with-session', 'xfce4-session'], {
+    procs.push(spawnChild('dbus-launch', ['--exit-with-session', 'xfce4-session'], {
       stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
       env: sessionEnv,
     }));
@@ -200,7 +218,7 @@ export async function ensureDesktop(botId) {
   } else {
     for (const [bin, argv] of [['openbox', []], ['xterm', ['-fa', 'Monospace', '-fs', '11']]]) {
       if (!have(bin)) continue;
-      procs.push(spawn(bin, argv, {
+      procs.push(spawnChild(bin, argv, {
         stdio: ['ignore', childLog(botId, 'session'), childLog(botId, 'session')],
         env: sessionEnv,
       }));
@@ -213,11 +231,11 @@ export async function ensureDesktop(botId) {
   // has its own websockify bridge, so "type a password to see your own bot"
   // would be friction with no real protection.
   const args = ['-display', `:${display}`, '-localhost', '-nopw', '-forever', '-shared', '-noxdamage', '-repeat', '-noshm', '-rfbport', String(vncPort)];
-  procs.push(spawn('x11vnc', args, { stdio: ['ignore', childLog(botId, 'vnc'), childLog(botId, 'vnc')] }));
+  procs.push(spawnChild('x11vnc', args, { stdio: ['ignore', childLog(botId, 'vnc'), childLog(botId, 'vnc')] }));
   for (let i = 0; i < 50 && !(await portOpen(vncPort)); i += 1) await sleep(100);
 
   // 3) noVNC bridge for that one display
-  procs.push(spawn('websockify', ['--web=/usr/share/novnc', String(webPort), `127.0.0.1:${vncPort}`], {
+  procs.push(spawnChild('websockify', ['--web=/usr/share/novnc', String(webPort), `127.0.0.1:${vncPort}`], {
     stdio: ['ignore', childLog(botId, 'web'), childLog(botId, 'web')],
   }));
   for (let i = 0; i < 50 && !(await portOpen(webPort)); i += 1) await sleep(100);

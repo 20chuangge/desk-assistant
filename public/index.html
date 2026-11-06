@@ -6694,7 +6694,9 @@ function syncTargetBranding() {
     ? `远程 Hub · ${state.computer?.host?.hostname || location.hostname}`
     : (remote ? target.name : '本机模式');
   if ($('side-account-sub')) $('side-account-sub').textContent = sub;
-  if ($('am-sub')) $('am-sub').textContent = remote ? `接管：${target.name}` : '本机模式 · 数据在这台电脑';
+  // Same sentence as the sidebar: the popover must not claim "local" while the
+  // panel is talking to a hub.
+  if ($('am-sub')) $('am-sub').textContent = sub;
   if ($('about-origin')) {
     $('about-origin').textContent = remote
       ? `${target.protocol === 'https:' ? 'https' : 'http'}://${targetLabel(target)}`
@@ -6846,7 +6848,7 @@ function syncViewer(target = activeTarget()) {
   const remote = target.id !== 'local';
   const takeover = desktopTakeover();
 
-  if (!remote && !takeover) {
+  if (!remote && !takeover && !state.computer?.desktop?.url) {
     unmountViewer();
     if (shield) shield.hidden = true;
     return;
