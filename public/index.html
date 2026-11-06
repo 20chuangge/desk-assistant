@@ -2617,36 +2617,32 @@
     <button class="icon-btn sm" id="vnc-modal-close" type="button" aria-label="关闭">✕</button>
   </div>
   <div class="modal-body">
-    <label class="form-label" for="vnc-name">给它起个名字</label>
+    <label class="form-label" for="vnc-name">名字</label>
     <input class="field" id="vnc-name" placeholder="例如：Ubuntu 虚拟机" autocomplete="off" maxlength="40" />
-    <label class="form-label" for="vnc-addr" style="margin-top:8px">机器地址</label>
-    <input class="field" id="vnc-addr" placeholder="例如 192.168.1.20:6080" autocomplete="off" spellcheck="false" />
-    <div class="row-note">填那台机器上 noVNC 的地址。只写 IP 时默认用 6080 端口。</div>
-    <label class="form-label" for="vnc-pass" style="margin-top:8px">VNC 密码（没有就留空）</label>
-    <input class="field" id="vnc-pass" type="password" placeholder="••••••" autocomplete="off" />
-    <label class="form-label" for="vnc-tz" style="margin-top:8px">这台机器的时区（可不填）</label>
-    <select class="field select" id="vnc-tz"></select>
-    <div class="row-note">填了以后，「跟随接管机器」就能用上它的时间。自动配置成功时会自己填好。</div>
 
-    <div class="modal-sep"></div>
-    <div class="modal-section-title">自动配置这台机器</div>
-    <div class="row-note">如果这台机器还没有 VNC，Desk 可以用 SSH 帮它装好。需要 Ubuntu 桌面版和一个有 sudo 权限的账号；密码只用于这一次配置，不会被保存。</div>
-    <label class="switch-row" for="vnc-auto">
-      <input type="checkbox" id="vnc-auto" />
-      <span>连接后自动装好远程桌面</span>
-    </label>
-    <div id="vnc-ssh-fields" hidden>
-      <label class="form-label" for="vnc-ssh-user">SSH 用户名</label>
-      <input class="field" id="vnc-ssh-user" placeholder="ubuntu" autocomplete="off" spellcheck="false" />
-      <label class="form-label" for="vnc-ssh-pass">SSH 密码</label>
-      <input class="field" id="vnc-ssh-pass" type="password" placeholder="••••••" autocomplete="new-password" />
-      <label class="form-label" for="vnc-ssh-port">SSH 端口</label>
-      <input class="field" id="vnc-ssh-port" type="number" min="1" max="65535" value="22" />
+    <label class="form-label" for="vnc-addr" style="margin-top:8px">IP 地址</label>
+    <input class="field" id="vnc-addr" placeholder="192.168.1.20" autocomplete="off" spellcheck="false" inputmode="url" />
+
+    <label class="form-label" for="vnc-ssh-user" style="margin-top:8px">SSH 用户名</label>
+    <input class="field" id="vnc-ssh-user" placeholder="ubuntu" autocomplete="off" spellcheck="false" />
+
+    <label class="form-label" for="vnc-ssh-port" style="margin-top:8px">SSH 端口</label>
+    <input class="field" id="vnc-ssh-port" type="number" min="1" max="65535" value="22" />
+
+    <label class="form-label" for="vnc-ssh-pass" style="margin-top:8px">SSH 密码</label>
+    <input class="field" id="vnc-ssh-pass" type="password" placeholder="••••••" autocomplete="new-password" />
+
+    <div class="row-note">
+      填完点「连接并自动配置」就行，剩下的都自动：
+      装依赖 → 部署 Desk Hub → 配好远程桌面 → 回来给你地址和配对码。
+      密码只用于这一次配置，不会保存。
     </div>
-    <div class="modal-note" id="vnc-progress" hidden></div>
 
+    <!-- kept for compatibility with the stored machine records -->
+    <input type="hidden" id="vnc-pass" value="desk1234" />
+    <input type="hidden" id="vnc-tz" value="" />
+    <div class="modal-note" id="vnc-progress" hidden></div>
     <div class="modal-note" id="vnc-modal-note" hidden></div>
-    <div class="row-note">这些信息只保存在这台电脑上。</div>
   </div>
   <div class="modal-foot">
     <button class="btn danger" id="vnc-delete" type="button" hidden>删除</button>
@@ -6873,19 +6869,14 @@ function openTargetModal(target) {
   editingTargetId = target?.id || null;
   $('vnc-modal-title').textContent = editingTargetId ? '编辑机器' : '连接一台机器';
   $('vnc-name').value = target?.name || '';
-  $('vnc-addr').value = target ? targetLabel(target) : '';
-  $('vnc-pass').value = target?.password || '';
-  fillZoneSelect($('vnc-tz'), target?.timezone || '');
-  // A brand-new machine is usually blank, so offer to set it up over SSH by
-  // default. Editing an existing machine leaves the switch off so a working
-  // VNC server is never reinstalled by accident.
-  const fresh = !editingTargetId;
-  $('vnc-auto').checked = fresh;
-  $('vnc-ssh-fields').hidden = !fresh;
-  $('vnc-save').textContent = fresh ? '保存并配置' : '保存';
-  $('vnc-ssh-user').value = '';
+  $('vnc-addr').value = target?.host || '';
+  $('vnc-pass').value = target?.password || 'desk1234';
+  // Five fields, everything else is automatic: a blank machine needs nothing
+  // more than where it is and how to log in.
+  $('vnc-ssh-user').value = target?.sshUser || 'ubuntu';
+  $('vnc-ssh-port').value = String(target?.sshPort || 22);
   $('vnc-ssh-pass').value = '';
-  $('vnc-ssh-port').value = '22';
+  $('vnc-save').textContent = editingTargetId ? '保存并重新配置' : '连接并自动配置';
   $('vnc-progress').hidden = true;
   $('vnc-progress').className = 'modal-note';
   $('vnc-delete').hidden = !editingTargetId;
@@ -6893,7 +6884,7 @@ function openTargetModal(target) {
   $('vnc-modal').classList.add('open');
   $('vnc-modal').setAttribute('aria-hidden', 'false');
   $('vnc-scrim').classList.add('show');
-  setTimeout(() => $('vnc-name').focus(), 50);
+  setTimeout(() => $('vnc-addr').focus(), 50);
 }
 
 function closeTargetModal() {
@@ -6905,63 +6896,47 @@ function closeTargetModal() {
 
 function saveTargetFromModal() {
   const name = $('vnc-name').value.trim();
-  const address = parseTargetAddress($('vnc-addr').value);
-  const password = $('vnc-pass').value;
+  const hostInput = $('vnc-addr').value.trim();
   const note = $('vnc-modal-note');
-  if (!name) {
-    note.textContent = '先给它起一个名字，比如「Ubuntu 虚拟机」。';
+  if (!hostInput) {
+    note.textContent = '先填那台机器的 IP，例如 192.168.1.20';
     note.hidden = false;
     return;
   }
+  const address = parseTargetAddress(hostInput);
   if (!address) {
-    note.textContent = '地址不对，例子：192.168.1.20:6080';
+    note.textContent = 'IP 地址看起来不对，例子：192.168.1.20';
     note.hidden = false;
     return;
   }
-  const timezone = $('vnc-tz').value || '';
-  // Read the SSH fields before the modal closes; the DOM keeps the values but
-  // reading first makes the intent explicit.
-  const provision = $('vnc-auto')?.checked
-    ? {
-      host: address.host,
-      sshPort: Number($('vnc-ssh-port').value) || 22,
-      username: $('vnc-ssh-user').value.trim(),
-      password: $('vnc-ssh-pass').value,
-      vncPassword: password || 'desk1234',
-    }
-    : null;
-  if (provision && (!provision.username || !provision.password)) {
-    note.textContent = '自动配置需要被控机器的 SSH 账号和密码。';
+  const sshUser = $('vnc-ssh-user').value.trim() || 'ubuntu';
+  const sshPort = Number($('vnc-ssh-port').value) || 22;
+  const sshPass = $('vnc-ssh-pass').value;
+  if (!sshPass) {
+    note.textContent = '还需要那台机器的 SSH 密码，才能自动配置。';
     note.hidden = false;
     return;
   }
-  // The installer uses desk1234 when the human left the VNC field blank; keep
-  // the same value on the machine entry so the live view can sign in later.
-  const savedPassword = provision && !password ? provision.vncPassword : password;
+  const targetName = name || address.host;
+  const provision = { host: address.host, sshPort, username: sshUser, password: sshPass, vncPassword: 'desk1234' };
   const targets = readTargets();
   let activeId = editingTargetId;
   if (editingTargetId) {
     const index = targets.findIndex((t) => t.id === editingTargetId);
-    if (index >= 0) targets[index] = { ...targets[index], ...address, name, password: savedPassword, timezone };
+    if (index >= 0) {
+      targets[index] = { ...targets[index], ...address, name: targetName, sshUser, sshPort };
+    }
   } else {
     const id = `machine-${Date.now().toString(36)}`;
     activeId = id;
-    targets.push({ id, name, password: savedPassword, ...address, timezone });
+    targets.push({ id, name: targetName, ...address, password: 'desk1234', sshUser, sshPort, timezone: '' });
     try { localStorage.setItem(VNC_ACTIVE_KEY, id); } catch { /* ignore */ }
   }
   writeTargets(targets);
-  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
-  if (desktopTakeover()) closeDesktopViewer();
   renderTargetPicker();
-  toast('已记住这台机器', false);
-  // #10: a brand-new machine with SSH details gets provisioned right away.
-  // Keep the dialog open so its progress line is visible.
-  if (provision) {
-    startRemoteProvision(activeId, provision);
-    return;
-  }
-  closeTargetModal();
-  reportUiState();
+  // Always provision: a new machine is blank, an edited one may have been
+  // reinstalled. The SSH password lives only inside this job.
+  startRemoteProvision(activeId, provision);
 }
 
 /**
@@ -7334,10 +7309,6 @@ function wireChrome() {
   $('vnc-scrim').addEventListener('click', closeTargetModal);
   $('vnc-save').addEventListener('click', saveTargetFromModal);
   $('vnc-delete').addEventListener('click', deleteTargetFromModal);
-  $('vnc-auto').addEventListener('change', () => {
-    $('vnc-ssh-fields').hidden = !$('vnc-auto').checked;
-    $('vnc-save').textContent = $('vnc-auto').checked ? '保存并配置' : '保存';
-  });
   $('vnc-modal').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && event.target.matches('input')) {
       event.preventDefault();

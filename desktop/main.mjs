@@ -537,6 +537,7 @@ if (!gotLock) {
         if (reachable) {
           remoteHub = candidate;
           rememberMachine(candidate);
+          bootLog(`remote mode → ${candidate}`);
           console.log(`[desk] remote mode → ${candidate}`);
           buildMenu();
           createWindowFor(candidate);
@@ -567,6 +568,7 @@ if (!gotLock) {
           if (ok) {
             remoteHub = candidate;
             rememberMachine(candidate);
+            bootLog(`remote mode → ${candidate} (after retry)`);
             console.log(`[desk] remote mode → ${candidate} (after retry)`);
             buildMenu();
             createWindowFor(candidate);
@@ -586,6 +588,7 @@ if (!gotLock) {
         port = 0;
         console.log('[desk] dev mode, loading', DEV_URL);
       } else {
+        bootLog(`local mode (no hub configured)`);
         await prepareHome();
         port = await startServer();
         console.log(`[desk] server ready on http://127.0.0.1:${port}/ (home: ${HOME})`);

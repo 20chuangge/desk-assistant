@@ -15,8 +15,23 @@ import net from 'node:net';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { Client } from 'ssh2';
 import { P, readJson, writeJsonAtomic, uid, nowIso } from './store.mjs';
+import { packApp, cleanupPack } from './bundle.mjs';
+
+// ssh2 is only needed when this machine PROVISIONS another one. Importing it
+// eagerly would make a freshly deployed hub crash on boot when node_modules was
+// not shipped, so load it on first use instead.
+let ssh2Module = null;
+async function loadSsh2() {
+  if (!ssh2Module) {
+    try {
+      ssh2Module = await import('ssh2');
+    } catch {
+      throw remoteError('REMOTE_NO_SSH2', '这台机器上没有 ssh2 依赖，无法再远程配置别的机器；请在 Desk 客户端里操作。');
+    }
+  }
+  return ssh2Module;
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT_FILE = path.join(HERE, '..', 'hub', 'desk-remote-setup.sh');
@@ -134,7 +149,8 @@ function friendlySshError(err) {
 }
 
 function connectSsh({ host, port, username, password }) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    const { Client } = await loadSsh2();
     const client = new Client();
     let settled = false;
     const finish = (err) => {
@@ -157,6 +173,26 @@ function connectSsh({ host, port, username, password }) {
       readyTimeout: 25000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 3,
+    });
+  });
+}
+
+/**
+ * Upload a local file to the target over SFTP. Used for the app tarball: piping
+ * a megabyte through `exec` stdin works but is fragile on slow links.
+ */
+function uploadFile(client, localPath, remotePath) {
+  return new Promise((resolve, reject) => {
+    client.sftp((err, sftp) => {
+      if (err) {
+        reject(remoteError('REMOTE_UPLOAD_FAILED', `SFTP 不可用：${err.message}`));
+        return;
+      }
+      sftp.fastPut(localPath, remotePath, (putErr) => {
+        sftp.end?.();
+        if (putErr) reject(remoteError('REMOTE_UPLOAD_FAILED', `上传失败：${putErr.message}`));
+        else resolve(true);
+      });
     });
   });
 }
@@ -223,6 +259,9 @@ export function createProvisioner() {
     timezone: job.timezone || '',
     address: job.address || '',
     webPort: job.webPort,
+    hubPort: job.hubPort,
+    hubUrl: job.hubUrl || '',
+    pairCode: job.pairCode || '',
     startedAt: job.startedAt,
     finishedAt: job.finishedAt || null,
     log: job.log.slice(-24),
@@ -241,7 +280,7 @@ export function createProvisioner() {
 
   async function run(job, options) {
     const {
-      host, sshPort, username, password, vncPassword, webPort,
+      host, sshPort, username, password, vncPassword, webPort, hubPort,
     } = options;
     let client = null;
     try {
@@ -266,6 +305,52 @@ export function createProvisioner() {
         sudoPrefix = "sudo -S -p '' ";
       }
 
+      // --- 1) the hub itself -------------------------------------------------
+      // A blank machine gets the whole product, not just a VNC viewer.
+      setProgress(job, '打包 Desk 程序…');
+      const packed = await packApp();
+      try {
+        setProgress(job, `上传程序（${Math.max(1, Math.round(packed.bytes / 1024 / 1024))} MB）…`);
+        const remotePkg = '/tmp/desk-hub.tar.gz';
+        await uploadFile(client, packed.file, remotePkg);
+
+        const fullScript = await fsp.readFile(path.join(HERE, '..', 'hub', 'desk-full-setup.sh'), 'utf8');
+        const fullMarker = 'DESK_FULL_SCRIPT_EOF';
+        if (fullScript.includes(fullMarker)) throw remoteError('REMOTE_SCRIPT_INVALID', 'setup script contains its own marker');
+        const upFull = await execStream(client, [
+          `cat > /tmp/desk-full-setup.sh <<'${fullMarker}'`,
+          fullScript,
+          fullMarker,
+          'chmod 755 /tmp/desk-full-setup.sh',
+        ].join('\n'), { timeoutMs: 30000 });
+        if (upFull.code !== 0) throw remoteError('REMOTE_UPLOAD_FAILED', 'could not write the setup script on the target');
+
+        setProgress(job, '安装并启动 Hub（首次 2-5 分钟）…');
+        const full = await execStream(
+          client,
+          `${sudoPrefix}bash /tmp/desk-full-setup.sh ${shellQuote(String(hubPort))} ${shellQuote(remotePkg)}`,
+          {
+            stdin: isRoot ? '' : `${password}\n`,
+            onLine: (line) => {
+              const text = line.trim();
+              if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+            },
+            timeoutMs: JOB_TIMEOUT_MS,
+          },
+        );
+        const urlMatch = /DESK_HUB_URL=(\S+)/.exec(full.output);
+        const codeMatch = /DESK_PAIR_CODE=(\d{6,10})/.exec(full.output);
+        job.hubUrl = urlMatch ? urlMatch[1] : `http://${host}:${hubPort}`;
+        job.pairCode = codeMatch ? codeMatch[1] : '';
+        if (full.code !== 0 || !job.pairCode) {
+          const tail = full.output.trim().split(/\r?\n/).slice(-3).join(' / ') || `exit ${full.code}`;
+          throw remoteError('REMOTE_HUB_FAILED', `Hub 部署失败：${tail}`);
+        }
+      } finally {
+        cleanupPack(packed.file);
+      }
+
+      // --- 2) the desktop ---------------------------------------------------
       setProgress(job, '上传配置脚本…');
       const script = await fsp.readFile(SCRIPT_FILE, 'utf8');
       const marker = 'DESK_REMOTE_SCRIPT_EOF';
@@ -366,6 +451,7 @@ export function createProvisioner() {
       const host = assertHost(input.host);
       const sshPort = assertPort(input.sshPort, 22, 'sshPort');
       const webPort = assertPort(input.webPort, 6080, 'webPort');
+      const hubPort = assertPort(input.hubPort, 4390, 'hubPort');
       const username = assertCredential(input.username, 'SSH username');
       const password = assertCredential(input.password, 'SSH password');
       const vncPassword = String(input.vncPassword || 'desk1234').slice(0, 64);
@@ -379,6 +465,9 @@ export function createProvisioner() {
         totalSteps: 9,
         address: host,
         webPort,
+        hubPort,
+        hubUrl: '',
+        pairCode: '',
         timezone: '',
         startedAt: nowIso(),
         finishedAt: null,
