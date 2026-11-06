@@ -113,42 +113,60 @@ chmod 600 /etc/desk/vnc.passwd
 
 cat > /usr/local/bin/desk-vnc-start <<'START'
 #!/bin/sh
-# Attach to whichever X display exists (greeter now, user session after login).
-D=$(ls /tmp/.X11-unix/ 2>/dev/null | sed -n 's/^X//p' | sort -n | head -1)
-if [ -z "$D" ]; then
-  echo "no X display yet; waiting"
-  exit 1
-fi
+# Keep x11vnc attached to the *current* Xorg display. GDM moves the session
+# from the greeter display (:0, gdm-owned cookie) to the user display (:1,
+# user-owned cookie) at login, so a one-shot launcher goes stale and port 5900
+# silently dies. Re-probe and restart whenever the display changes.
 
-AUTH=""
-# GDM/LightDM expose the greeter's Xauthority at stable paths. Try those first:
-# walking /proc/*/environ can pick up an unrelated XAUTHORITY (an app's Xwayland
-# cookie, for instance) and point x11vnc at the wrong display.
-for f in \
-  /run/user/*/gdm/Xauthority \
-  /run/user/*/lightdm/Xauthority \
-  /var/run/lightdm/root/:$D \
-  /var/lib/gdm3/.Xauthority \
-  /root/.Xauthority; do
-  [ -r "$f" ] && { AUTH="$f"; break; }
-done
-if [ -z "$AUTH" ]; then
+current_display() {
+  ls /tmp/.X11-unix/ 2>/dev/null | sed -n 's/^X//p' | sort -n | head -1
+}
+
+current_auth() {
+  for f in \
+    /run/user/*/gdm/Xauthority \
+    /run/user/*/lightdm/Xauthority \
+    /var/run/lightdm/root/:$1 \
+    /var/lib/gdm3/.Xauthority \
+    /root/.Xauthority; do
+    [ -r "$f" ] && { printf '%s' "$f"; return 0; }
+  done
   for p in /proc/[0-9]*; do
     [ -r "$p/environ" ] || continue
     candidate=$(tr '\0' '\n' < "$p/environ" 2>/dev/null | sed -n 's/^XAUTHORITY=//p' | head -1)
-    [ -n "$candidate" ] && [ -r "$candidate" ] && { AUTH="$candidate"; break; }
+    [ -n "$candidate" ] && [ -r "$candidate" ] && { printf '%s' "$candidate"; return 0; }
   done
-fi
+  printf 'guess'
+}
 
-if [ -n "$AUTH" ]; then
-  AUTHARG="-auth $AUTH"
-else
-  AUTHARG="-auth guess"
-fi
+while :; do
+  D=$(current_display)
+  if [ -z "$D" ]; then
+    echo "[desk-vnc] no X display yet; waiting"
+    sleep 2
+    continue
+  fi
+  AUTH=$(current_auth "$D")
+  echo "[desk-vnc] attaching to :$D (auth $AUTH)"
 
-exec /usr/bin/x11vnc -display ":$D" $AUTHARG \
-  -forever -shared -loop -noshm -noxdamage -repeat \
-  -rfbauth /etc/desk/vnc.passwd -rfbport 5900 -o /var/log/desk-vnc.log
+  /usr/bin/x11vnc -display ":$D" -auth "$AUTH" \
+    -forever -shared -noshm -noxdamage -repeat \
+    -rfbauth /etc/desk/vnc.passwd -rfbport 5900 -o /var/log/desk-vnc.log &
+  PID=$!
+
+  # x11vnc will not notice the display changing underneath it.
+  while kill -0 "$PID" 2>/dev/null; do
+    NEW=$(current_display)
+    if [ "$NEW" != "$D" ]; then
+      echo "[desk-vnc] display changed :$D -> ${NEW:-none}; restarting"
+      kill "$PID" 2>/dev/null || true
+      break
+    fi
+    sleep 3
+  done
+  wait "$PID" 2>/dev/null || true
+  sleep 2
+done
 START
 chmod 755 /usr/local/bin/desk-vnc-start
 
