@@ -67,6 +67,71 @@ function clearHub() {
   try { fs.unlinkSync(HUB_FILE); } catch { /* already gone */ }
 }
 
+// ---------------------------------------------------------------------------
+// machines: every hub is its own world (own bots, memory, workspace). This
+// list is just a shortcut so switching does not mean typing an address again.
+// ---------------------------------------------------------------------------
+
+const MACHINES_FILE = path.join(app.getPath('userData'), 'machines.json');
+
+function readMachines() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(MACHINES_FILE, 'utf8'));
+    if (Array.isArray(raw)) return raw.filter((m) => m && typeof m.url === 'string');
+  } catch { /* first run */ }
+  return [];
+}
+
+function writeMachines(list) {
+  try {
+    fs.mkdirSync(path.dirname(MACHINES_FILE), { recursive: true });
+    fs.writeFileSync(MACHINES_FILE, `${JSON.stringify(list, null, 2)}\n`);
+  } catch { /* a read-only profile must not break switching */ }
+}
+
+/** Remember a hub we successfully talked to, newest first. */
+function rememberMachine(url) {
+  const norm = normalizeHub(url);
+  if (!norm) return;
+  const list = readMachines().filter((m) => m.url !== norm);
+  let name = norm;
+  try { name = new URL(norm).hostname; } catch { /* keep url */ }
+  list.unshift({ url: norm, name, lastUsed: new Date().toISOString() });
+  writeMachines(list.slice(0, 20));
+  return list;
+}
+
+/** Native picker: each machine keeps its own bots, so this is the switcher. */
+async function pickMachine() {
+  const list = readMachines();
+  const buttons = [
+    ...list.map((m) => `${m.name === remoteHub ? '● ' : ''}${m.name}`),
+    '添加新机器…',
+    '取消',
+  ];
+  const { response } = await dialog.showMessageBox(win || undefined, {
+    type: 'question',
+    title: '切换机器',
+    message: '选择要连接的机器',
+    detail: '每台机器有自己的一套 Bot、记忆和工作区。切换后窗口会重新加载为该机器的界面，不会混在一起。',
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    noLink: true,
+  });
+  if (response === buttons.length - 1) return;
+  if (response === buttons.length - 2) {
+    await switchHub();
+    return;
+  }
+  const target = list[response];
+  if (!target || target.url === remoteHub) return;
+  writeHub(target.url);
+  rememberMachine(target.url);
+  app.relaunch();
+  app.exit(0);
+}
+
 function normalizeHub(url) {
   const raw = String(url || '').trim();
   if (!raw) return '';
@@ -393,6 +458,7 @@ function buildMenu() {
     {
       label: 'Desk',
       submenu: [
+        { label: '机器…', click: pickMachine },
         { label: '切换到别的 Hub…', click: switchHub },
         ...(remoteHub ? [{ label: '回到本机模式', click: async () => { clearHub(); app.relaunch(); app.exit(0); } }] : []),
         { type: 'separator' },
@@ -464,6 +530,7 @@ if (!gotLock) {
       if (candidate && !DEV_URL) {
         if (await probeHub(candidate)) {
           remoteHub = candidate;
+          rememberMachine(candidate);
           console.log(`[desk] remote mode → ${candidate}`);
           buildMenu();
           createWindowFor(candidate);
