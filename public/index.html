@@ -7088,6 +7088,30 @@ async function startRemoteProvision(targetId, options) {
     if (bar) bar.style.width = '100%';
     if (barStep) barStep.textContent = '完成';
     show(job.message || '远程桌面已就绪。', job.state === 'warning' ? '' : 'ok');
+    // The machine now runs its own Hub: make "use it" one click instead of
+    // leaving the human to find the address and retype it in the picker.
+    if (job.hubUrl) {
+      const note = $('vnc-modal-note');
+      if (note) {
+        note.hidden = false;
+        note.innerHTML = `<div style="margin-bottom:6px">Hub 已就绪：<b>${escapeHtml(job.hubUrl)}</b>`
+          + (job.pairCode ? ` · 配对码 <b>${escapeHtml(job.pairCode)}</b>` : '')
+          + '</div>';
+        if (typeof window.desk?.switchHub === 'function') {
+          const btn = document.createElement('button');
+          btn.className = 'btn primary tiny';
+          btn.type = 'button';
+          btn.textContent = '切换到这台机器';
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = '正在切换…';
+            const res = await window.desk.switchHub(job.hubUrl);
+            if (!res?.ok) { btn.disabled = false; btn.textContent = '切换失败，重试'; }
+          });
+          note.appendChild(btn);
+        }
+      }
+    }
     // The preview iframe was mounted before the target had a VNC server; drop
     // it so the next render opens a fresh connection instead of showing the
     // failed page forever.

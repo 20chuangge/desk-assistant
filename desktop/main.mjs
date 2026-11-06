@@ -506,6 +506,17 @@ ipcMain.on('shell:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
+// Switch the whole client to another hub and relaunch: this is what "把 Bot
+// 也放到那台机器上" means, and it is different from only viewing a screen.
+ipcMain.handle('desk:switch-hub', async (_event, url) => {
+  const target = normalizeHub(url);
+  if (!target) return { ok: false, error: '地址格式不对' };
+  writeHub(target);
+  rememberMachine(target);
+  setTimeout(() => { app.relaunch(); app.exit(0); }, 50);
+  return { ok: true };
+});
+
 // The UI asks for the machine picker so "切换机器" is one click from the panel.
 ipcMain.handle('desk:pick-machine', async () => {
   await pickMachine();
