@@ -2400,7 +2400,6 @@
           <div class="pc-target-bar" style="margin-top:6px">
             <span class="pc-target-label">看谁的屏幕</span>
             <select class="field pc-target-select" id="pc-target" aria-label="选择要接管的机器"></select>
-            <button class="btn tiny" id="pc-target-add" type="button">+ 机器</button>
           </div>
           <div class="pc-target-foot">
             <span class="pc-target-hint" id="pc-target-hint">本机：Desk 运行在这台电脑上</span>
@@ -2503,6 +2502,7 @@
     <nav class="settings-nav" id="settings-nav" aria-label="设置分类">
       <button class="setnav active" type="button" data-set-target="sec-model">模型</button>
       <button class="setnav" type="button" data-set-target="sec-run">运行方式</button>
+      <button class="setnav" type="button" data-set-target="sec-machines">机器</button>
       <button class="setnav" type="button" data-set-target="sec-appearance">外观</button>
       <button class="setnav" type="button" data-set-target="sec-pair">手机配对</button>
       <button class="setnav" type="button" data-set-target="sec-about">关于</button>
@@ -2551,6 +2551,18 @@
           <span>完全自主，不再逐条询问</span>
         </label>
         <div class="row-note" id="policy-note">关着的时候，删数据、发消息、写工作区外这类动作会停下来等你点确认。打开后它自己决定，所有决定仍会记录；命中危险命令黑名单（例如 rm -rf）的仍然会问你。</div>
+      </section>
+
+      <section class="dsec" id="sec-machines">
+        <div class="dsec-head">机器</div>
+        <div class="dsec-hint">
+          一台机器就是一个独立的 Desk：它有自己的 Bot、记忆和工作区。切换机器后整窗重载，互不混淆。
+        </div>
+        <div class="row-actions">
+          <button class="btn primary tiny" id="set-add-machine" type="button">添加机器（SSH 自动配置）</button>
+          <button class="btn tiny" id="set-switch-machine" type="button">切换机器…</button>
+        </div>
+        <div class="dsec-hint" id="set-machines-list"></div>
       </section>
 
       <section class="dsec" id="sec-appearance">
@@ -6281,6 +6293,7 @@ function setSettingsNav(sectionId) {
 }
 
 function openSettings(section) {
+  renderMachinesList();
   loadSettings().catch(() => { /* keep whatever we have */ });
   loadPolicy().catch(() => { /* older server: switch stays off */ });
   closeSidebar();
@@ -6949,6 +6962,23 @@ function fillZoneSelect(select, current) {
     `<option value="${escapeHtml(zone)}">${escapeHtml(timezoneLabel(zone))}</option>`
   ))].join('');
   select.value = current || '';
+}
+
+/** One line per machine in Settings: what is configured and where it lives. */
+function renderMachinesList() {
+  const box = $('set-machines-list');
+  if (!box) return;
+  const targets = readTargets();
+  const onHub = (() => {
+    const origin = location.origin;
+    return !/^http:\/\/(127\.0\.0\.1|localhost):/.test(origin);
+  })();
+  const host = state.computer?.host?.hostname || (location.hostname === '127.0.0.1' ? '本机' : location.hostname);
+  const lines = [
+    `<div>当前 Bot 宿主：<b>${escapeHtml(onHub ? `远程 Hub · ${host}` : '本机（这台电脑）')}</b></div>`,
+    ...targets.map((t) => `<div>${escapeHtml(t.name || t.host)} · ${escapeHtml(t.host)}</div>`),
+  ];
+  box.innerHTML = lines.join('');
 }
 
 function openTargetModal(target) {
