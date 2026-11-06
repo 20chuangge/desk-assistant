@@ -7458,7 +7458,7 @@ function wireChrome() {
   $('pc-max').addEventListener('click', () => togglePanelMax());
   $('pc-exit').addEventListener('click', () => togglePanelMax(false));
   $('pc-target').addEventListener('change', (event) => selectTakeoverTarget(event.target.value));
-  $('pc-target-add').addEventListener('click', () => openTargetModal(null));
+  $('pc-target-add')?.addEventListener('click', () => openTargetModal(null));
   $('pc-target-edit').addEventListener('click', () => {
     const target = activeTarget();
     if (target.id !== 'local') openTargetModal(target);

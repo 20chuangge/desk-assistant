@@ -2597,6 +2597,16 @@ function shanghaiWeekday(ts) {
   return { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[parts];
 }
 
+
+  // A removed element must not break boot: every `$('id').addEventListener`
+  // without optional chaining has to point at markup that still exists.
+  {
+    const html = await fsp.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+    const ids = [...html.matchAll(/\$\('([A-Za-z0-9_-]+)'\)\.addEventListener/g)].map((m) => m[1]);
+    const missing = [...new Set(ids)].filter((id) => !html.includes(`id="${id}"`));
+    check('no unguarded listener wiring for removed elements', missing.length === 0, `missing: ${missing.join(', ')}`);
+  }
+
 main().catch(async (err) => {
   console.error('');
   console.error('SMOKE CRASHED:', err?.stack || err);
