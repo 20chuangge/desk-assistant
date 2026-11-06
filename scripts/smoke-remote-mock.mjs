@@ -54,7 +54,8 @@ const seen = [];
 function respond(command) {
   seen.push(command.split('\n')[0].slice(0, 90));
   if (command === 'id -u') return '1000\n';
-  if (command.includes('sudo -S -p')) return '';
+  // Only the sudo timestamp probe; postflight sudo commands must fall through.
+  if (command === "sudo -S -p '' -v") return '';
   if (command.includes('sudo -n true')) return 'needs-password\n';
   if (command.includes('/etc/os-release')) return 'Ubuntu 24.04 LTS\n';
   if (command.includes('cat > /tmp/desk-remote-setup.sh')) return '';
@@ -66,7 +67,10 @@ function respond(command) {
   if (command.includes('for t in x11vnc')) return '';
   if (command.includes('systemctl is-active')) return 'active\nactive\n';
   if (command.includes('systemctl is-enabled')) return 'enabled\nenabled\n';
+  // The provisioner now verifies the VNC backend, not just the websockify port.
+  if (command.includes("grep -q ':5900")) return 'ok\n';
   if (command.includes('ss -ltn')) return `${LISTENING}\n`;
+  if (command.includes('/usr/bin/Xorg')) return '/usr/bin/Xorg :0 -auth /run/user/1000/gdm/Xauthority\n';
   if (command.includes('stat -c')) return '600 root:root\n';
   if (command.includes('^WaylandEnable=')) return 'WaylandEnable=false\n';
   if (command.includes('ls /tmp/.X11-unix')) return 'X0\n';

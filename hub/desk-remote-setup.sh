@@ -89,13 +89,23 @@ if [ -z "$D" ]; then
 fi
 
 AUTH=""
-for f in \
-  /run/user/*/gdm/Xauthority \
-  /run/user/*/lightdm/Xauthority \
-  /var/run/lightdm/root/:$D \
-  /root/.Xauthority; do
-  [ -r "$f" ] && { AUTH="$f"; break; }
+# Distros keep moving the greeter's Xauthority. Prefer whatever the running X
+# server was actually launched with, then fall back to the known paths.
+for p in /proc/[0-9]*; do
+  [ -r "$p/environ" ] || continue
+  candidate=$(tr '\0' '\n' < "$p/environ" 2>/dev/null | sed -n 's/^XAUTHORITY=//p' | head -1)
+  [ -n "$candidate" ] && [ -r "$candidate" ] && { AUTH="$candidate"; break; }
 done
+if [ -z "$AUTH" ]; then
+  for f in \
+    /run/user/*/gdm/Xauthority \
+    /run/user/*/lightdm/Xauthority \
+    /var/run/lightdm/root/:$D \
+    /var/lib/gdm3/.Xauthority \
+    /root/.Xauthority; do
+    [ -r "$f" ] && { AUTH="$f"; break; }
+  done
+fi
 
 if [ -n "$AUTH" ]; then
   AUTHARG="-auth $AUTH"
@@ -170,10 +180,26 @@ if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
   ufw allow "${PORT}/tcp" >/dev/null 2>&1 || true
 fi
 
+# x11vnc can only attach to an Xorg display, never a rootless Xwayland one.
+# WaylandEnable=false plus a gdm3 restart is NOT enough when a user session is
+# already running: the login screen must be used to pick "Ubuntu on Xorg".
+if ps -eo args | grep -q '[X]wayland' && ! ps -eo args | grep -q '[/]usr/bin/Xorg'; then
+  step "warning: 检测到 Wayland/Xwayland 会话且没有 Xorg；x11vnc 无法接管桌面"
+  step "warning: 请重启机器，在登录界面齿轮里选「Ubuntu on Xorg」，再重新运行本脚本"
+fi
+
 TIMEZONE="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 step "[9/9] 完成"
 echo "$LOG_TAG timezone=${TIMEZONE:-UTC}"
 echo "$LOG_TAG address=${IP:-127.0.0.1}"
 echo "$LOG_TAG novnc=http://${IP:-127.0.0.1}:${PORT}/vnc.html"
-ss -ltn 2>/dev/null | grep -E ":(5900|${PORT})\b" || echo "$LOG_TAG warning: VNC ports not listening yet; the service will retry"
+# websockify can bind the web port while its VNC backend is dead, so check both.
+if ss -ltn 2>/dev/null | grep -Eq ':5900\b'; then
+  step "VNC 后端 5900 已监听"
+else
+  step "warning: VNC 后端 5900 未监听；noVNC 网页会打开但看不到桌面"
+fi
+if ! ss -ltn 2>/dev/null | grep -Eq ":${PORT}\b"; then
+  step "warning: noVNC ${PORT} 未监听；服务会自动重试"
+fi

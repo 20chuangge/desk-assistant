@@ -77,6 +77,8 @@ function exec(client, command) {
       stream.on('data', consume);
       stream.stderr?.on('data', consume);
       stream.on('close', (code) => resolve({ code: code ?? 0, output: output.trim() }));
+      // Only sudo prompts get the password; never feed stdin to ordinary commands.
+      if (command.includes('sudo -S -p')) stream.write(`${DESK_TARGET_PASS}\n`);
     });
   });
 }
@@ -114,9 +116,12 @@ const POSTFLIGHT = {
   services: 'systemctl is-active desk-vnc.service desk-novnc.service 2>&1',
   enabled: 'systemctl is-enabled desk-vnc.service desk-novnc.service 2>&1',
   listening: 'ss -ltn 2>/dev/null | grep -E ":(5900|6080)\\b" || echo none',
-  passwdFile: 'stat -c "%a %U:%G" /etc/desk/vnc.passwd 2>/dev/null || echo missing',
+  // /etc/desk is 0700 root-owned, so this needs sudo to inspect.
+  passwdFile: "sudo -S -p '' stat -c \"%a %U:%G\" /etc/desk/vnc.passwd 2>/dev/null || echo missing",
   wayland: "grep -h '^WaylandEnable=' /etc/gdm3/custom.conf 2>/dev/null || echo unset",
   xSocket: 'ls /tmp/.X11-unix/ 2>/dev/null || echo none',
+  displayServer: "ps -eo args | grep -E '/usr/bin/Xorg|Xwayland' | grep -v grep | head -5 || echo none",
+  vncLog: "sudo -S -p '' tail -n 6 /var/log/desk-vnc.log 2>/dev/null || echo unreadable",
   script: 'ls -l /tmp/desk-remote-setup.sh 2>/dev/null || echo missing',
 };
 

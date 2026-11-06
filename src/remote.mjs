@@ -315,6 +315,17 @@ export function createProvisioner() {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
 
+      // websockify binds the web port even when its VNC backend is down, so a
+      // green TCP probe alone is NOT proof that the desktop is viewable.
+      setProgress(job, '检查 VNC 后端 5900…');
+      let vncReady = false;
+      if (reachable) {
+        try {
+          const check = await execStream(client, "ss -ltn 2>/dev/null | grep -q ':5900\\b' && echo ok || echo missing", { timeoutMs: 15000 });
+          vncReady = check.output.trim().split(/\s+/).pop() === 'ok';
+        } catch { /* keep the warning path */ }
+      }
+
       job.timezone = timezone;
       job.address = host;
       const cache = await readInfoCache();
@@ -322,15 +333,21 @@ export function createProvisioner() {
         ...(cache[host] || {}),
         timezone: timezone || cache[host]?.timezone || '',
         webPort,
-        ready: reachable,
+        ready: reachable && vncReady,
         lastProvisionedAt: nowIso(),
       };
       await writeInfoCache(cache);
 
-      job.state = reachable ? 'done' : 'warning';
-      job.message = reachable
-        ? `远程桌面已就绪${timezone ? `（时区 ${timezone}）` : ''}。`
-        : '系统配置完成，但 6080 端口还没响应；可能需要再等半分钟或检查防火墙。';
+      if (!reachable) {
+        job.state = 'warning';
+        job.message = '系统配置完成，但 6080 端口还没响应；可能需要再等半分钟或检查防火墙。';
+      } else if (!vncReady) {
+        job.state = 'warning';
+        job.message = 'noVNC 网页已打开，但 VNC 后端 5900 未监听，桌面仍看不到。常见于 Wayland 会话：请重启机器，在登录界面选「Ubuntu on Xorg」后重新运行。';
+      } else {
+        job.state = 'done';
+        job.message = `远程桌面已就绪${timezone ? `（时区 ${timezone}）` : ''}。`;
+      }
       job.finishedAt = nowIso();
     } catch (err) {
       job.state = 'error';
