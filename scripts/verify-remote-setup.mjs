@@ -134,52 +134,65 @@ try {
   report.preflight.blankMachine = blank;
   console.log(`\n空白机器判定: ${blank ? '是 → 会走「从零安装桌面」分支' : '否 → 只会走「已有桌面」分支，不能代表完整验收'}`);
 
-  console.log('\n=== 执行一键配置 ===');
-  const provisioner = createProvisioner();
-  const started = provisioner.start({
-    host: DESK_TARGET_HOST,
-    sshPort: Number(DESK_SSH_PORT),
-    username: DESK_TARGET_USER,
-    password: DESK_TARGET_PASS,
-    vncPassword: DESK_VNC_PASS,
-    webPort: Number(DESK_WEB_PORT),
-  });
+  // desk-remote-setup.sh is apt-only. Say so up front instead of running a
+  // provisioning job that is guaranteed to fail on dnf/yum systems.
+  const aptBased = /apt-get/.test(report.preflight.apt?.output || '');
+  report.preflight.aptBased = aptBased;
+  if (!aptBased) {
+    report.verdict = 'UNSUPPORTED';
+    report.reason = '目标系统没有 apt-get；desk-remote-setup.sh 目前只支持 apt-based 系统（Ubuntu/Debian），跳过一键配置。';
+    console.log(`\n${report.reason}`);
+  } else {
+    console.log('\n=== 执行一键配置 ===');
+    const provisioner = createProvisioner();
+    const started = provisioner.start({
+      host: DESK_TARGET_HOST,
+      sshPort: Number(DESK_SSH_PORT),
+      username: DESK_TARGET_USER,
+      password: DESK_TARGET_PASS,
+      vncPassword: DESK_VNC_PASS,
+      webPort: Number(DESK_WEB_PORT),
+    });
 
-  let lastMessage = '';
-  let job = started;
-  const deadline = Date.now() + 25 * 60 * 1000;
-  while (Date.now() < deadline) {
-    job = provisioner.get(started.id) || job;
-    if (job.message !== lastMessage) {
-      lastMessage = job.message;
-      console.log(`  [${job.step}/${job.totalSteps}] ${job.message}`);
+    let lastMessage = '';
+    let job = started;
+    const deadline = Date.now() + 25 * 60 * 1000;
+    while (Date.now() < deadline) {
+      job = provisioner.get(started.id) || job;
+      if (job.message !== lastMessage) {
+        lastMessage = job.message;
+        console.log(`  [${job.step}/${job.totalSteps}] ${job.message}`);
+      }
+      if (job.state !== 'running') break;
+      await sleep(1500);
     }
-    if (job.state !== 'running') break;
-    await sleep(1500);
+    report.job = job;
+
+    client = await connect();
+    report.postflight = await inspect(client, '验收检查（只读）', POSTFLIGHT);
+    client.end();
+    client = null;
+
+    const probe = await probeTcp(DESK_TARGET_HOST, Number(DESK_WEB_PORT), 2500);
+    report.probe = probe;
+
+    // systemctl prints "inactive"/"unknown" for missing units. Match the exact
+    // token: a substring test would count "inactive" as "active" and lie.
+    const serviceStates = (report.postflight.services?.output || '').trim().split(/\s+/);
+    const checks = [
+      ['provisioner 到达终态', job?.state !== 'running'],
+      ['provisioner 报告成功', job?.state === 'done'],
+      ['noVNC 端口可连', probe.reachable],
+      ['desk-vnc 服务 active', serviceStates[0] === 'active'],
+      ['desk-novnc 服务 active', serviceStates[1] === 'active'],
+      ['5900 与 6080 都在监听', /:5900/.test(report.postflight.listening?.output || '') && /:6080/.test(report.postflight.listening?.output || '')],
+      ['VNC 密码文件权限 600', /^600 /.test(report.postflight.passwdFile?.output || '')],
+      ['Wayland 已关闭', /false/.test(report.postflight.wayland?.output || '')],
+      ['X display 存在', /^X\d+$/m.test(report.postflight.xSocket?.output || '')],
+    ];
+    report.checks = checks.map(([name, ok]) => ({ name, ok: Boolean(ok) }));
+    report.verdict = checks.every(([, ok]) => ok) ? 'PASS' : 'FAIL';
   }
-  report.job = job;
-
-  client = await connect();
-  report.postflight = await inspect(client, '验收检查（只读）', POSTFLIGHT);
-  client.end();
-  client = null;
-
-  const probe = await probeTcp(DESK_TARGET_HOST, Number(DESK_WEB_PORT), 2500);
-  report.probe = probe;
-
-  const checks = [
-    ['provisioner 到达终态', job?.state !== 'running'],
-    ['provisioner 报告成功', job?.state === 'done'],
-    ['noVNC 端口可连', probe.reachable],
-    ['desk-vnc 服务 active', /active/.test(report.postflight.services?.output || '')],
-    ['desk-novnc 服务 active', (report.postflight.services?.output || '').match(/active/g)?.length === 2],
-    ['5900 与 6080 都在监听', /:5900/.test(report.postflight.listening?.output || '') && /:6080/.test(report.postflight.listening?.output || '')],
-    ['VNC 密码文件权限 600', /^600 /.test(report.postflight.passwdFile?.output || '')],
-    ['Wayland 已关闭', /false/.test(report.postflight.wayland?.output || '')],
-    ['X display 存在', /X\d/.test(report.postflight.xSocket?.output || '')],
-  ];
-  report.checks = checks.map(([name, ok]) => ({ name, ok: Boolean(ok) }));
-  report.verdict = checks.every(([, ok]) => ok) ? 'PASS' : 'FAIL';
 } catch (err) {
   report.verdict = 'ERROR';
   report.error = String(err?.message || err);
