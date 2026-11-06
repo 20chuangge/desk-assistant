@@ -48,6 +48,7 @@ const LISTENING = [
   'LISTEN 0 128 0.0.0.0:6080 0.0.0.0:*',
 ].join('\n');
 
+let noApt = false;
 const seen = [];
 
 function respond(command) {
@@ -59,7 +60,7 @@ function respond(command) {
   if (command.includes('cat > /tmp/desk-remote-setup.sh')) return '';
   if (command.includes('bash /tmp/desk-remote-setup.sh')) return `${STEP_LOG}\n`;
   if (command.includes('timedatectl')) return 'Asia/Shanghai\n';
-  if (command.includes('command -v apt-get')) return '/usr/bin/apt-get\n';
+  if (command.includes('command -v apt-get')) return noApt ? 'NO-APT\n' : '/usr/bin/apt-get\n';
   if (command.includes('for d in gdm3')) return '';
   if (command.includes('ls /usr/share/xsessions')) return 'none\n';
   if (command.includes('for t in x11vnc')) return '';
@@ -99,33 +100,53 @@ const fakeNoVnc = net.createServer((socket) => socket.end());
 const [sshPort, webPort] = await Promise.all([listen(ssh), listen(fakeNoVnc)]);
 console.log(`模拟 SSH :${sshPort} / 模拟 noVNC :${webPort}`);
 
-const child = spawn(process.execPath, ['scripts/verify-remote-setup.mjs'], {
-  cwd: REPO,
-  env: {
-    ...process.env,
-    DESK_TARGET_HOST: '127.0.0.1',
-    DESK_TARGET_USER: USER,
-    DESK_TARGET_PASS: PASSWORD,
-    DESK_SSH_PORT: String(sshPort),
-    DESK_WEB_PORT: String(webPort),
-  },
-});
+const childEnv = {
+  ...process.env,
+  DESK_TARGET_HOST: '127.0.0.1',
+  DESK_TARGET_USER: USER,
+  DESK_TARGET_PASS: PASSWORD,
+  DESK_SSH_PORT: String(sshPort),
+  DESK_WEB_PORT: String(webPort),
+};
 
-let output = '';
-child.stdout.on('data', (chunk) => { output += chunk; process.stdout.write(chunk); });
-child.stderr.on('data', (chunk) => { output += chunk; process.stderr.write(chunk); });
+async function runVerify() {
+  const child = spawn(process.execPath, ['scripts/verify-remote-setup.mjs'], {
+    cwd: REPO,
+    env: childEnv,
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const code = await new Promise((resolve) => child.on('close', resolve));
+  return { code, output };
+}
 
-const exitCode = await new Promise((resolve) => child.on('close', resolve));
+// Scenario 1: a blank apt-based machine goes through the whole flow.
+const first = await runVerify();
+process.stdout.write(first.output);
+const firstSeen = [...seen];
+
+// Scenario 2: a dnf-only machine must be rejected during preflight, before any
+// setup script is uploaded or executed.
+noApt = true;
+seen.length = 0;
+const second = await runVerify();
+process.stdout.write(second.output);
+const secondSeen = [...seen];
+noApt = false;
 
 const checks = [
-  ['验收脚本以 PASS 退出', exitCode === 0],
-  ['走完了 SSH 连接', seen.some((c) => c === 'id -u')],
-  ['检查了 sudo', seen.some((c) => c.includes('sudo -S -p'))],
-  ['上传了配置脚本', seen.some((c) => c.includes('cat > /tmp/desk-remote-setup.sh'))],
-  ['执行了配置脚本', seen.some((c) => c.includes('bash /tmp/desk-remote-setup.sh'))],
-  ['读取了时区', seen.some((c) => c.includes('timedatectl'))],
-  ['执行了验收后检查', seen.some((c) => c.includes('systemctl is-active'))],
-  ['输出了 PASS 结论', /结论: PASS/.test(output)],
+  ['验收脚本以 PASS 退出', first.code === 0],
+  ['走完了 SSH 连接', firstSeen.some((c) => c === 'id -u')],
+  ['检查了 sudo', firstSeen.some((c) => c.includes('sudo -S -p'))],
+  ['上传了配置脚本', firstSeen.some((c) => c.includes('cat > /tmp/desk-remote-setup.sh'))],
+  ['执行了配置脚本', firstSeen.some((c) => c.includes('bash /tmp/desk-remote-setup.sh'))],
+  ['读取了时区', firstSeen.some((c) => c.includes('timedatectl'))],
+  ['执行了验收后检查', firstSeen.some((c) => c.includes('systemctl is-active'))],
+  ['输出了 PASS 结论', /结论: PASS/.test(first.output)],
+  ['非 apt 系统被识别为 UNSUPPORTED', /结论: UNSUPPORTED/.test(second.output)],
+  ['非 apt 系统跳过了一键配置', !secondSeen.some((c) => c.includes('bash /tmp/desk-remote-setup.sh'))],
+  ['非 apt 系统不产出误报的服务 PASS', !/PASS  desk-vnc 服务 active/.test(second.output)],
 ];
 
 console.log('\n=== 模拟验收链路 ===');
