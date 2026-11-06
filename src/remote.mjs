@@ -269,7 +269,7 @@ export function createProvisioner() {
 
   const setProgress = (job, message) => {
     job.message = message;
-    const match = /^\[(\d+)\/(\d+)\]/.exec(message);
+    const match = /(\d+)\s*\/\s*(\d+)/.exec(message);
     if (match) {
       job.step = Number(match[1]);
       job.totalSteps = Number(match[2]);
