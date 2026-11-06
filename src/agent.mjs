@@ -250,7 +250,7 @@ export class AgentRuntime {
     }
     this.active.set(turnId, { controller, botId: bot.id });
 
-    const maxSteps = Math.min(Math.max(Number(bot.policy?.maxSteps) || 12, 1), 24);
+    const maxSteps = Math.min(Math.max(Number(bot.policy?.maxSteps) || 24, 1), 60);
     const maxTurnMs = Number(bot.policy?.maxTurnMs) || 5 * 60 * 1000;
     const deadline = Date.now() + maxTurnMs;
     const startedAt = nowIso();
@@ -337,6 +337,7 @@ export class AgentRuntime {
         emit: (event) => this.bus.emit({ ...baseEvent, ...event }),
       };
 
+      const trail = [];
       while (steps < maxSteps) {
         if (controller.signal.aborted) {
           status = 'cancelled';
@@ -431,6 +432,8 @@ export class AgentRuntime {
 
         for (const call of response.toolCalls) {
           const outcome = await this.executeToolCall({ call, ctx, bot, turnId, baseEvent, messages });
+          trail.push(outcome?.ok === false ? `${call.name}✗` : call.name);
+          if (trail.length > 12) trail.shift();
           // Roster edits made by a tool are invisible to every other window
           // (and to the sidebar of the very window that ran it), so announce
           // them. The UI re-reads /api/bots instead of guessing the diff.
@@ -463,7 +466,16 @@ export class AgentRuntime {
 
       if (!finished && status === 'success' && steps >= maxSteps) {
         status = 'max_steps';
-        summary = summary || `Stopped after ${maxSteps} steps without a task_finish.`;
+        const last = trail.slice(-4).join(' → ') || '（没有工具调用）';
+        summary = `Stopped after ${maxSteps} steps without a task_finish.`;
+        // Say it in the chat, not only in the status row: a silent stop looks
+        // like a crash.
+        const note =
+          `我连着做了 ${steps} 步还没收尾，先停在这里，避免空转烧额度。\n\n`
+          + `最后几步：${last}\n\n`
+          + '如果还要继续，回一句「继续」我就接着做；如果方向不对，告诉我该改哪里。';
+        await this.record(bot.id, { kind: 'assistant', text: note, turnId, source, system: true });
+        this.bus.emit({ type: 'message', ...baseEvent, text: note, final: true, system: true });
       }
 
       if (status === 'needs_approval') {
