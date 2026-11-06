@@ -559,43 +559,11 @@ if (!gotLock) {
           createTray();
           return;
         }
-        const { response } = await dialog.showMessageBox({
-          type: 'warning',
-          title: '连不上这台机器',
-          message: `连不上 ${candidate}`,
-          detail:
-            'Desk 不会自动改成本机模式——那样 Bot 会跑到这台电脑上运行，而不是你选的那台机器。\n\n'
-            + '· 重试：再试一次连接（建议先确认那台机器开着、Hub 服务在跑）\n'
-            + '· 用本机模式：明确使用这台电脑上的 Bot 和浏览器\n'
-            + '· 退出：先不管',
-          buttons: ['重试', '用本机模式', '退出'],
-          defaultId: 0,
-          cancelId: 2,
-          noLink: true,
-        });
-        if (response === 2) {
-          app.quit();
-          return;
-        }
-        if (response === 0) {
-          let ok = false;
-          for (let attempt = 0; attempt < 3 && !ok; attempt += 1) ok = await probeHub(candidate);
-          if (ok) {
-            remoteHub = candidate;
-            rememberMachine(candidate);
-            bootLog(`remote mode → ${candidate} (after retry)`);
-            console.log(`[desk] remote mode → ${candidate} (after retry)`);
-            buildMenu();
-            createWindowFor(candidate);
-            createTray();
-            return;
-          }
-          dialog.showErrorBox('还是连不上', `连不上 ${candidate}。\n\n先启动那台机器上的 Hub（desk-hub 服务），再重新打开 Desk。`);
-          app.quit();
-          return;
-        }
-        // Explicit "use this machine": drop the hub for this run only.
-        console.warn(`[desk] user chose local mode; hub ${candidate} will be retried next launch`);
+        // Unreachable hub: fall straight back to this computer. The picker
+        // (机器…) still lists the hub, so retrying is one click away; blocking
+        // the launch with a modal every time the VM sleeps is worse.
+        bootLog(`hub unreachable → local mode (${candidate})`);
+        console.warn(`[desk] hub ${candidate} unreachable; running locally`);
       }
 
       let port;
