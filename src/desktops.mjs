@@ -1,0 +1,211 @@
+/**
+ * desktops.mjs - one desktop per bot.
+ *
+ * The product claim is "bots with their own computer", so a bot must not share
+ * a screen with its siblings: whatever bot A opens, bot B must not see. This
+ * module gives every bot its own X display, its own VNC server and its own
+ * noVNC bridge, all as children of the hub process (no systemd juggling).
+ *
+ *   bot  ── display :120+N  ── x11vnc 127.0.0.1:59<N>  ── websockify :61<N>
+ *
+ * Linux only: this needs Xvfb. On macOS/Windows the manager reports
+ * unavailable and callers fall back to the single shared desktop, which is what
+ * earlier versions had.
+ *
+ * Ports are derived from a stable index so they do not move between restarts;
+ * allocation happens lazily (first time a bot's desktop is asked for).
+ */
+
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+
+const BASE_DISPLAY = 120;      // :120 .. :159
+const BASE_VNC_PORT = 5900 + 20; // 5920 ..
+const BASE_WEB_PORT = 6100;    // 6100 ..
+const MAX_BOTS = 40;
+
+/** @type {Map<string, {display:number, vncPort:number, webPort:number, procs:object[], startedAt:string}>} */
+const desktops = new Map();
+let indexByBot = new Map();
+let vncPassword = '';
+let dataDir = '';
+
+function hasBinary(bin) {
+  try {
+    const res = spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' });
+    return res.status === 0 && Boolean(String(res.stdout || '').trim());
+  } catch {
+    return false;
+  }
+}
+
+/** Whether per-bot desktops can work on this machine at all. */
+export function desktopSupport() {
+  if (process.platform !== 'linux') {
+    return { available: false, reason: 'per-bot desktops need Linux (Xvfb + x11vnc)' };
+  }
+  const missing = ['Xvfb', 'x11vnc', 'websockify'].filter((b) => !hasBinary(b));
+  if (missing.length) {
+    return { available: false, reason: `missing ${missing.join(', ')} (apt install xvfb x11vnc novnc websockify)` };
+  }
+  return { available: true, reason: '' };
+}
+
+export function configure({ dataDir: dir, password } = {}) {
+  if (dir) dataDir = dir;
+  if (typeof password === 'string' && password) vncPassword = password;
+}
+
+/** Reuse the desktop password the installer already stored, if any. */
+async function loadPassword() {
+  if (vncPassword) return vncPassword;
+  try {
+    const raw = JSON.parse(await fsp.readFile(path.join(dataDir, 'vnc.json'), 'utf8'));
+    vncPassword = String(raw.password || '');
+  } catch { /* not configured: VNC stays passwordless on 127.0.0.1 only */ }
+  return vncPassword;
+}
+
+async function passwordFile() {
+  const pass = await loadPassword();
+  if (!pass) return '';
+  const file = path.join(dataDir, 'desktops.passwd');
+  if (!fs.existsSync(file)) {
+    await fsp.mkdir(dataDir, { recursive: true });
+    const res = spawnSync('x11vnc', ['-storepasswd', pass, file], { encoding: 'utf8' });
+    if (res.status !== 0) return '';
+    try { await fsp.chmod(file, 0o600); } catch { /* best effort */ }
+  }
+  return file;
+}
+
+function stableIndex(botId) {
+  if (indexByBot.has(botId)) return indexByBot.get(botId);
+  const used = new Set(indexByBot.values());
+  let index = 0;
+  while (used.has(index) && index < MAX_BOTS) index += 1;
+  if (index >= MAX_BOTS) index = MAX_BOTS - 1;
+  indexByBot.set(botId, index);
+  return index;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function portOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host }, () => { socket.destroy(); resolve(true); });
+    socket.on('error', () => resolve(false));
+    socket.setTimeout(800, () => { socket.destroy(); resolve(false); });
+  });
+}
+
+/** Xvfb with -nolisten tcp is only visible as a unix socket. */
+function displayReady(display) {
+  return fs.existsSync(`/tmp/.X11-unix/X${display}`);
+}
+
+/**
+ * Start (or reuse) the desktop for a bot. Returns the viewer URL.
+ * Idempotent: calling it repeatedly is how the UI polls.
+ */
+export async function ensureDesktop(botId) {
+  const support = desktopSupport();
+  if (!support.available) throw new Error(support.reason);
+  if (!botId) throw new Error('botId is required');
+
+  const existing = desktops.get(botId);
+  if (existing) {
+    return { ...publicInfo(botId, existing), started: false };
+  }
+
+  const index = stableIndex(botId);
+  const display = BASE_DISPLAY + index;
+  const vncPort = BASE_VNC_PORT + index;
+  const webPort = BASE_WEB_PORT + index;
+  const procs = [];
+
+  // 1) the virtual display
+  procs.push(spawn('Xvfb', [`:${display}`, '-screen', '0', '1400x900x24', '-nolisten', 'tcp'], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    detached: false,
+  }));
+  for (let i = 0; i < 40 && !displayReady(display); i += 1) await sleep(100);
+
+  // 2) VNC server on that display, localhost only
+  const args = ['-display', `:${display}`, '-localhost', '-forever', '-shared', '-noxdamage', '-repeat', '-noshm', '-rfbport', String(vncPort)];
+  const passFile = await passwordFile();
+  if (passFile) args.push('-rfbauth', passFile);
+  else args.push('-nopw');
+  procs.push(spawn('x11vnc', args, { stdio: ['ignore', 'ignore', 'ignore'] }));
+  for (let i = 0; i < 50 && !(await portOpen(vncPort)); i += 1) await sleep(100);
+
+  // 3) noVNC bridge for that one display
+  procs.push(spawn('websockify', ['--web=/usr/share/novnc', String(webPort), `127.0.0.1:${vncPort}`], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+  }));
+  for (let i = 0; i < 50 && !(await portOpen(webPort)); i += 1) await sleep(100);
+
+  const entry = { display, vncPort, webPort, procs, startedAt: new Date().toISOString() };
+  desktops.set(botId, entry);
+  return { ...publicInfo(botId, entry), started: true };
+}
+
+function publicInfo(botId, entry) {
+  return {
+    botId,
+    display: `:${entry.display}`,
+    vncPort: entry.vncPort,
+    webPort: entry.webPort,
+    running: entry.procs.every((p) => !p.killed && p.exitCode === null),
+    startedAt: entry.startedAt,
+    url: `http://${lanAddress()}:${entry.webPort}/vnc.html?autoconnect=1&resize=scale`,
+  };
+}
+
+function lanAddress() {
+  const nets = os.networkInterfaces();
+  for (const list of Object.values(nets)) {
+    for (const net of list || []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
+/** Info for a bot's desktop without starting one. */
+export function desktopInfo(botId) {
+  const entry = desktops.get(botId);
+  if (!entry) return { botId, running: false, display: null, url: null };
+  return publicInfo(botId, entry);
+}
+
+/** What the browser/shell tools should put in the environment for this bot. */
+export function desktopEnv(botId) {
+  const entry = desktops.get(botId);
+  return entry ? { DISPLAY: `:${entry.display}` } : {};
+}
+
+export function stopDesktop(botId) {
+  const entry = desktops.get(botId);
+  if (!entry) return false;
+  for (const proc of entry.procs) {
+    try { proc.kill(); } catch { /* already gone */ }
+  }
+  desktops.delete(botId);
+  indexByBot.delete(botId);
+  return true;
+}
+
+export function stopAllDesktops() {
+  for (const botId of [...desktops.keys()]) stopDesktop(botId);
+}
+
+export function listDesktops() {
+  return [...desktops.keys()].map((botId) => desktopInfo(botId));
+}

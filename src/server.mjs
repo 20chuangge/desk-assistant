@@ -59,6 +59,7 @@ import * as skills from './skills.mjs';
 import * as groups from './groups.mjs';
 import * as settingsModule from './settings.mjs';
 import { publicProviderCatalogue } from './providers.mjs';
+import { configure as configureDesktops, desktopInfo, desktopSupport, ensureDesktop, listDesktops, stopDesktop } from './desktops.mjs';
 import { createProvisioner, remoteInfo } from './remote.mjs';
 import {
   evaluateAuth,
@@ -130,6 +131,9 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
   // bot_message tool needs the runtime, and the registry is needed to build it.
   const refs = { runtime: null, routines: null, app: null };
   const provisioner = createProvisioner();
+
+  // Per-bot desktops read the VNC password the installer stored, if any.
+  configureDesktops({ dataDir: P.dataDir });
 
   const registry = createRegistry({
     workspaceDir,
@@ -480,6 +484,26 @@ route('GET', /^\/api\/settings$/, async (_req, _res, { state }) => ({
 // Static catalogue of every model provider Desk can talk to. No secrets, so it
 // is safe for any paired device; the UI uses it to fill the settings form.
 route('GET', /^\/api\/providers$/, async () => ({ providers: publicProviderCatalogue() }));
+
+// Per-bot desktops. `support` explains why it is off (non-Linux hub, missing
+// Xvfb) so the UI can say something more useful than "failed".
+route('GET', /^\/api\/desktops$/, async () => ({ support: desktopSupport(), desktops: listDesktops() }));
+
+route('GET', /^\/api\/bots\/(?<botId>[^/]+)\/desktop$/, async (_req, _res, { params }) => {
+  const botId = params.botId;
+  try {
+    const support = desktopSupport();
+    if (!support.available) return { botId, support, desktop: { botId, running: false, url: null } };
+    const desktop = await ensureDesktop(botId);
+    return { botId, support, desktop };
+  } catch (err) {
+    return { botId, support: desktopSupport(), desktop: { botId, running: false, url: null }, error: err.message };
+  }
+});
+
+route('POST', /^\/api\/bots\/(?<botId>[^/]+)\/desktop\/stop$/, async (_req, _res, { params }) => ({
+  ok: stopDesktop(params.botId),
+}));
 
 route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
   // The documented body is flat: {provider, baseUrl, model, apiKey?}.
@@ -927,9 +951,26 @@ route('GET', /^\/api\/groups\/(?<id>[^/]+)$/, async (_req, _res, { params }) => 
 
 const SHOT_FILE = () => path.join(P.dataDir, 'screen.png');
 
-route('GET', /^\/api\/computer$/, async (_req, _res, { state }) => {
+route('GET', /^\/api\/computer$/, async (req, _res, { state, query }) => {
   const shot = fs.existsSync(SHOT_FILE()) ? SHOT_FILE() : null;
   const snap = await computerSnapshot({ screenshotPath: shot });
+
+  // Bot-scoped desktops: when ?botId= is given and that bot has its own X
+  // display, the viewer must show THAT desktop, not the machine's shared one.
+  const botId = String(query?.get?.('botId') || '').trim();
+  let perBot = null;
+  if (botId) {
+    try {
+      perBot = desktopInfo(botId);
+      if (!perBot.running && desktopSupport().available) perBot = await ensureDesktop(botId);
+    } catch (err) {
+      perBot = { botId, running: false, error: err.message };
+    }
+    if (perBot?.url) {
+      snap.desktop = { url: perBot.url, botId, perBot: true, display: perBot.display };
+    }
+    snap.perBotDesktop = { ...perBot, support: desktopSupport() };
+  }
   // noVNC asks for the VNC password every single time, which is unbearable when
   // the viewer opens in a panel. Hand it the password once via the URL.
   // Source: DESK_VNC_PASSWORD, or data/vnc.json written by the installer.

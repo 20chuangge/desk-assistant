@@ -6476,7 +6476,10 @@ function fmtUptime(sec) {
 async function loadComputer() {
   let data;
   try {
-    data = await api('/api/computer');
+    // Ask for THIS bot's desktop: every bot has its own screen, so the viewer
+    // must not fall back to whatever the machine happens to be showing.
+    const scope = state.botId ? `?botId=${encodeURIComponent(state.botId)}` : '';
+    data = await api(`/api/computer${scope}`);
   } catch (err) {
     $('pc-stats').innerHTML = `<div class="row-note">这台 Hub 还没有 /api/computer（${escapeHtml(err.message)}）。更新 Hub 端即可。</div>`;
     return;
@@ -6490,6 +6493,13 @@ async function loadComputer() {
     ['内存', `${data.memory.usedPercent}% · ${fmtBytes(data.memory.totalBytes - data.memory.freeBytes)} / ${fmtBytes(data.memory.totalBytes)}`],
     ['磁盘', data.disk ? `剩余 ${fmtBytes(data.disk.freeBytes)} / ${fmtBytes(data.disk.totalBytes)}` : '—'],
     ['浏览器', data.browser?.running ? `运行中 · pid ${data.browser.pid}` : (data.browser?.supported ? '未启动' : '不可用')],
+    ['桌面归属', (() => {
+      const per = data.perBotDesktop;
+      if (!per) return '共享桌面';
+      if (per.running && per.display) return `本 Bot 专属 ${per.display}`;
+      if (per.support && per.support.available === false) return '共享桌面（Hub 不支持专属桌面）';
+      return per.error ? `专属桌面启动失败` : '未启动';
+    })()],
   ];
   $('pc-stats').innerHTML = rows
     .map(([k, v]) => `<div class="pc-row"><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`)
