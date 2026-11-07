@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * verify-remote-setup.mjs - end-to-end acceptance run for the one-click remote
- * desktop provisioning (project "next step" #1).
+ * verify-remote-setup.mjs - end-to-end acceptance run for "add a machine":
+ * SSH in, install a hub with hub/setup-linux.sh, check it really runs.
  *
  * Credentials come from the environment only: they are never written to argv,
  * files, or the report.
@@ -9,17 +9,16 @@
  *   DESK_TARGET_HOST=192.168.100.134 DESK_TARGET_USER=ubuntu \
  *   DESK_TARGET_PASS=... node scripts/verify-remote-setup.mjs
  *
- * Optional: DESK_SSH_PORT (22), DESK_WEB_PORT (6080), DESK_VNC_PASS,
+ * Optional: DESK_SSH_PORT (22), DESK_HUB_PORT (4390),
  *           DESK_VERIFY_OUT (write the JSON report to this path).
  *
- * Flow: read-only SSH preflight -> the real createProvisioner (upload script,
- * sudo, install, wait for the port) -> poll the job -> SSH postflight checks
- * -> JSON verdict.
+ * Flow: read-only SSH preflight -> the real createProvisioner (OS detection,
+ * upload, sudo, install, pairing code) -> poll the job -> SSH postflight
+ * checks -> verdict PASS / FAIL / UNSUPPORTED.
  *
- * WARNING: the setup script installs packages and restarts the display manager
- * and VNC services on the target. Only run this against a machine you are
- * explicitly allowed to reconfigure. A machine that already has a desktop is
- * NOT a blank machine: it exercises the "already installed" branch only.
+ * WARNING: the setup script installs packages, writes a systemd unit and a
+ * sudoers entry on the target. Only run this against a machine you are
+ * explicitly allowed to reconfigure.
  */
 
 import { Client } from 'ssh2';
@@ -31,25 +30,21 @@ const {
   DESK_TARGET_HOST,
   DESK_TARGET_USER,
   DESK_TARGET_PASS,
-  DESK_VNC_PASS = 'desk-accept-1234',
   DESK_SSH_PORT = '22',
-  DESK_WEB_PORT = '6080',
+  DESK_HUB_PORT = '4390',
   DESK_VERIFY_OUT,
 } = process.env;
 
-const missing = ['DESK_TARGET_HOST', 'DESK_TARGET_USER', 'DESK_TARGET_PASS']
-  .filter((key) => !process.env[key]);
+const missing = ['DESK_TARGET_HOST', 'DESK_TARGET_USER', 'DESK_TARGET_PASS'].filter((key) => !process.env[key]);
 if (missing.length) {
   console.error(`缺少环境变量: ${missing.join(', ')}`);
   console.error('用法: DESK_TARGET_HOST=... DESK_TARGET_USER=... DESK_TARGET_PASS=... node scripts/verify-remote-setup.mjs');
   process.exit(2);
 }
 
-// The provisioner caches remote-info.json in ASSIST_HOME. Isolate the run so an
-// acceptance test never touches real user data.
-const tempHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'desk-verify-'));
-process.env.ASSIST_HOME = tempHome;
-const { createProvisioner, probeTcp } = await import('../src/remote.mjs');
+// Isolate the run so an acceptance test never touches real user data.
+process.env.ASSIST_HOME = await fsp.mkdtemp(path.join(os.tmpdir(), 'desk-verify-'));
+const { createProvisioner } = await import('../src/remote.mjs');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -77,8 +72,6 @@ function exec(client, command) {
       stream.on('data', consume);
       stream.stderr?.on('data', consume);
       stream.on('close', (code) => resolve({ code: code ?? 0, output: output.trim() }));
-      // Only sudo prompts get the password; never feed stdin to ordinary commands.
-      if (command.includes('sudo -S -p')) stream.write(`${DESK_TARGET_PASS}\n`);
     });
   });
 }
@@ -100,120 +93,89 @@ async function inspect(client, label, commands) {
 }
 
 const PREFLIGHT = {
-  os: '. /etc/os-release; echo "$PRETTY_NAME"',
+  kernel: 'uname -s',
+  os: '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"',
   uid: 'id -u',
   sudo: 'sudo -n true >/dev/null 2>&1 && echo passwordless || echo needs-password',
-  apt: 'command -v apt-get || echo missing',
-  displayManagers: 'for d in gdm3 lightdm sddm; do command -v "$d" >/dev/null 2>&1 && echo "$d"; done',
-  xsessions: 'ls /usr/share/xsessions/ 2>/dev/null || echo none',
-  vncTools: 'for t in x11vnc websockify; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done',
-  listening: 'ss -ltn 2>/dev/null | tail -n +2',
-  wayland: "grep -h '^WaylandEnable=' /etc/gdm3/custom.conf 2>/dev/null || echo unset",
-  timezone: 'timedatectl show -p Timezone --value 2>/dev/null || echo unknown',
+  packageManager: 'for p in apt-get dnf yum; do command -v "$p" >/dev/null 2>&1 && echo "$p"; done',
+  node: 'node -v 2>/dev/null || echo none',
+  desktopTools: 'for t in Xvfb x11vnc websockify xfce4-session gnome-session; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done',
+  memory: "awk '/MemTotal/ {print int($2/1024) \" MB\"}' /proc/meminfo",
 };
 
+const port = Number(DESK_HUB_PORT);
 const POSTFLIGHT = {
-  services: 'systemctl is-active desk-vnc.service desk-novnc.service 2>&1',
-  enabled: 'systemctl is-enabled desk-vnc.service desk-novnc.service 2>&1',
-  listening: 'ss -ltn 2>/dev/null | grep -E ":(5900|6080)\\b" || echo none',
-  // /etc/desk is 0700 root-owned, so this needs sudo to inspect.
-  passwdFile: "sudo -S -p '' stat -c \"%a %U:%G\" /etc/desk/vnc.passwd 2>/dev/null || echo missing",
-  wayland: "grep -h '^WaylandEnable=' /etc/gdm3/custom.conf 2>/dev/null || echo unset",
-  xSocket: 'ls /tmp/.X11-unix/ 2>/dev/null || echo none',
-  displayServer: "ps -eo args | grep -E '/usr/bin/Xorg|Xwayland' | grep -v grep | head -5 || echo none",
-  vncLog: "sudo -S -p '' tail -n 6 /var/log/desk-vnc.log 2>/dev/null || echo unreadable",
-  script: 'ls -l /tmp/desk-remote-setup.sh 2>/dev/null || echo missing',
+  service: 'systemctl is-active desk-hub 2>&1',
+  enabled: 'systemctl is-enabled desk-hub 2>&1',
+  health: `(curl -fsS -m 3 http://127.0.0.1:${port}/api/health || wget -qO- -T 3 http://127.0.0.1:${port}/api/health) 2>/dev/null || echo unreachable`,
+  unit: "sed -n 's/^WorkingDirectory=//p;s/^ExecStart=//p' /etc/systemd/system/desk-hub.service 2>/dev/null || echo missing",
+  sessionHelper: 'ls -l /usr/local/bin/desk-bot-session 2>/dev/null || echo missing',
+  desktopTools: 'for t in Xvfb x11vnc websockify xfce4-session gnome-session; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done',
+  sudoers: 'ls /etc/sudoers.d/desk-hub 2>/dev/null || echo missing',
 };
 
 let client;
-let report = { host: DESK_TARGET_HOST, webPort: Number(DESK_WEB_PORT), startedAt: new Date().toISOString() };
+const report = { host: DESK_TARGET_HOST, hubPort: port, startedAt: new Date().toISOString() };
 try {
-  console.log(`目标: ${DESK_TARGET_USER}@${DESK_TARGET_HOST}:${DESK_SSH_PORT} (noVNC ${DESK_WEB_PORT})`);
+  console.log(`目标: ${DESK_TARGET_USER}@${DESK_TARGET_HOST}:${DESK_SSH_PORT}（Hub 端口 ${port}）`);
   client = await connect();
   report.preflight = await inspect(client, '预检（只读）', PREFLIGHT);
   client.end();
   client = null;
 
-  const blank = !/lightdm|gdm3|sddm/.test(report.preflight.displayManagers?.output || '')
-    && !/x11vnc|websockify/.test(report.preflight.vncTools?.output || '');
-  report.preflight.blankMachine = blank;
-  console.log(`\n空白机器判定: ${blank ? '是 → 会走「从零安装桌面」分支' : '否 → 只会走「已有桌面」分支，不能代表完整验收'}`);
-
-  // desk-remote-setup.sh is apt-only. Say so up front instead of running a
-  // provisioning job that is guaranteed to fail on dnf/yum systems.
-  const aptBased = /apt-get/.test(report.preflight.apt?.output || '');
-  report.preflight.aptBased = aptBased;
-  if (!aptBased) {
-    report.verdict = 'UNSUPPORTED';
-    report.reason = '目标系统没有 apt-get；desk-remote-setup.sh 目前只支持 apt-based 系统（Ubuntu/Debian），跳过一键配置。';
-    console.log(`\n${report.reason}`);
-  } else {
-    console.log('\n=== 执行一键配置 ===');
-    const provisioner = createProvisioner();
-    const started = provisioner.start({
-      host: DESK_TARGET_HOST,
-      sshPort: Number(DESK_SSH_PORT),
-      username: DESK_TARGET_USER,
-      password: DESK_TARGET_PASS,
-      vncPassword: DESK_VNC_PASS,
-      webPort: Number(DESK_WEB_PORT),
-    });
-
-    let lastMessage = '';
-    let job = started;
-    const deadline = Date.now() + 25 * 60 * 1000;
-    while (Date.now() < deadline) {
-      job = provisioner.get(started.id) || job;
-      if (job.message !== lastMessage) {
-        lastMessage = job.message;
-        console.log(`  [${job.step}/${job.totalSteps}] ${job.message}`);
-      }
-      if (job.state !== 'running') break;
-      await sleep(1500);
+  console.log('\n=== 执行一键配置 ===');
+  const provisioner = createProvisioner();
+  let job = provisioner.start({
+    host: DESK_TARGET_HOST,
+    sshPort: Number(DESK_SSH_PORT),
+    hubPort: port,
+    username: DESK_TARGET_USER,
+    password: DESK_TARGET_PASS,
+  });
+  let lastMessage = '';
+  const deadline = Date.now() + 25 * 60 * 1000;
+  while (job.state === 'running' && Date.now() < deadline) {
+    await sleep(1500);
+    job = provisioner.get(job.id);
+    if (job.message !== lastMessage) {
+      lastMessage = job.message;
+      console.log(`  [${job.step || '-'}/${job.totalSteps || '-'}] ${job.message}`);
     }
-    report.job = job;
+  }
+  report.job = { state: job.state, message: job.message, os: job.os, hubUrl: job.hubUrl, paired: Boolean(job.pairCode), log: job.log };
+  console.log(`  hubUrl: ${job.hubUrl || '-'}`);
 
+  if (job.state === 'error' && /Windows|认不出/.test(job.message)) {
+    report.verdict = 'UNSUPPORTED';
+    report.reason = job.message;
+  } else if (job.state === 'error' || job.state === 'running') {
+    report.verdict = 'FAIL';
+    report.reason = job.state === 'running' ? '超时' : job.message;
+  } else {
     client = await connect();
-    report.postflight = await inspect(client, '验收检查（只读）', POSTFLIGHT);
-    client.end();
-    client = null;
-
-    const probe = await probeTcp(DESK_TARGET_HOST, Number(DESK_WEB_PORT), 2500);
-    report.probe = probe;
-
-    // systemctl prints "inactive"/"unknown" for missing units. Match the exact
-    // token: a substring test would count "inactive" as "active" and lie.
-    const serviceStates = (report.postflight.services?.output || '').trim().split(/\s+/);
+    report.postflight = await inspect(client, '验收后检查', POSTFLIGHT);
+    const pf = report.postflight;
     const checks = [
-      ['provisioner 到达终态', job?.state !== 'running'],
-      ['provisioner 报告成功', job?.state === 'done'],
-      ['noVNC 端口可连', probe.reachable],
-      ['desk-vnc 服务 active', serviceStates[0] === 'active'],
-      ['desk-novnc 服务 active', serviceStates[1] === 'active'],
-      ['5900 与 6080 都在监听', /:5900/.test(report.postflight.listening?.output || '') && /:6080/.test(report.postflight.listening?.output || '')],
-      ['VNC 密码文件权限 600', /^600 /.test(report.postflight.passwdFile?.output || '')],
-      ['Wayland 已关闭', /false/.test(report.postflight.wayland?.output || '')],
-      ['X display 存在', /^X\d+$/m.test(report.postflight.xSocket?.output || '')],
+      ['desk-hub 服务 active', pf.service.output.split(/\s+/)[0] === 'active'],
+      ['desk-hub 开机自启', pf.enabled.output.split(/\s+/)[0] === 'enabled'],
+      ['本机 /api/health 应答', /"ok"\s*:\s*true/.test(pf.health.output)],
+      ['拿到了配对码', Boolean(job.pairCode)],
+      ['每 Bot 桌面会话脚本已安装', !/missing/.test(pf.sessionHelper.output)],
     ];
-    report.checks = checks.map(([name, ok]) => ({ name, ok: Boolean(ok) }));
+    console.log('\n=== 结论检查 ===');
+    for (const [name, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);
+    report.checks = Object.fromEntries(checks);
     report.verdict = checks.every(([, ok]) => ok) ? 'PASS' : 'FAIL';
+    if (job.state === 'warning') report.warning = job.message;
   }
 } catch (err) {
-  report.verdict = 'ERROR';
-  report.error = String(err?.message || err);
-  console.error(`\n验收中断: ${report.error}`);
+  report.verdict = 'FAIL';
+  report.reason = err.message;
 } finally {
-  try { client?.end(); } catch { /* already closed */ }
-  await fsp.rm(tempHome, { recursive: true, force: true });
-  report.finishedAt = new Date().toISOString();
-  console.log(`\n=== 结论: ${report.verdict} ===`);
-  if (report.checks) {
-    for (const c of report.checks) console.log(`  ${c.ok ? 'PASS' : 'FAIL'}  ${c.name}`);
-  }
-  console.log(`\n${JSON.stringify(report, null, 2)}`);
-  if (DESK_VERIFY_OUT) {
-    await fsp.writeFile(DESK_VERIFY_OUT, JSON.stringify(report, null, 2), 'utf8');
-    console.log(`报告已写入 ${DESK_VERIFY_OUT}`);
-  }
-  process.exitCode = report.verdict === 'PASS' ? 0 : 1;
+  try { client?.end(); } catch { /* gone */ }
 }
+
+report.finishedAt = new Date().toISOString();
+console.log(`\n结论: ${report.verdict}${report.reason ? `（${report.reason}）` : ''}`);
+if (DESK_VERIFY_OUT) await fsp.writeFile(DESK_VERIFY_OUT, `${JSON.stringify(report, null, 2)}\n`);
+process.exitCode = report.verdict === 'PASS' ? 0 : report.verdict === 'UNSUPPORTED' ? 3 : 1;

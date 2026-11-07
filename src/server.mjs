@@ -60,7 +60,7 @@ import * as groups from './groups.mjs';
 import * as settingsModule from './settings.mjs';
 import { publicProviderCatalogue } from './providers.mjs';
 import { configure as configureDesktops, desktopInfo, desktopSupport, ensureDesktop, listDesktops, stopDesktop } from './desktops.mjs';
-import { createProvisioner, remoteInfo } from './remote.mjs';
+import { createProvisioner } from './remote.mjs';
 import {
   evaluateAuth,
   isAuthExemptPath,
@@ -580,21 +580,15 @@ route('GET', /^\/api\/pairing$/, async (_req, _res, { state }) => pairingInfo(st
 
 // --- UI state / remote machines -------------------------------------------
 //
-// The browser owns localStorage (theme, timezone mode, machine list). It pushes
-// a small projection here so the primary bot can read what the human sees and
-// change it over chat. The bot does not store machine passwords here; the
-// `ui.command` event carries them to the open window and nowhere else.
+// The browser owns localStorage (theme, timezone mode). It pushes a small
+// projection here so the primary bot can read what the human sees and change
+// it over chat.
 
 route('GET', /^\/api\/ui\/state$/, async (_req, _res, { state }) => state.uiView());
 
 route('POST', /^\/api\/ui\/state$/, async (_req, _res, { body, state }) => ({
   ok: true,
   ui: state.reportUi(body?.patch || body || {}),
-}));
-
-route('GET', /^\/api\/remote\/info$/, async (_req, _res, { query }) => remoteInfo({
-  host: query.get('host'),
-  port: Number(query.get('port')) || 6080,
 }));
 
 route('GET', /^\/api\/remote\/provision$/, async (_req, _res, { state }) => ({

@@ -19,8 +19,8 @@
 
 | 角色 | 装什么 | 怎么连 |
 |---|---|---|
-| **Hub**（闲置 PC / 云主机） | `hub/start-hub.bat`（Windows）或 `hub/start-hub.sh` / systemd / Docker | 监听 `0.0.0.0:4390`，启动时打印局域网地址 + 8 位配对码 |
-| **你的笔记本** | 安装包（`Desk-Setup-*.exe`） | 菜单 **Desk → 切换到别的 Hub…** 填地址；成功后下次启动直接连它 |
+| **Hub**（闲置 PC / 云主机） | 推荐：Desk 客户端「添加机器」自动装；手动：`sudo bash hub/setup-linux.sh`（Linux）、`hub/start-hub.bat`（Windows）、Docker | 监听 `0.0.0.0:4390`，启动时打印局域网地址 + 8 位配对码 |
+| **你的笔记本** | 安装包（`Desk-Setup-*.exe`） | 左上角机器切换器 → 添加机器（填 IP + SSH 账号），装好自动配对并加进列表 |
 | **手机** | 浏览器（或后面打的 APK） | 打开 Hub 地址 + 配对码；https 下可"添加到主屏幕" |
 
 ---
@@ -49,13 +49,11 @@ sudo mkdir -p /opt/desk && sudo chown $USER /opt/desk
 cd /opt/desk && bash hub/start-hub.sh
 ```
 
-想常驻：
+想常驻（装 Node、每 Bot 桌面依赖、systemd 服务、放行防火墙，Ubuntu/Debian/Rocky 通用；客户端「添加机器」跑的就是它）：
 
 ```bash
-sudo cp hub/desk-hub.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now desk-hub
-journalctl -u desk-hub -f     # 看配对码
+sudo bash hub/setup-linux.sh          # 装到 /opt/desk-hub，最后打印地址和配对码
+journalctl -u desk-hub -f
 ```
 
 或者 Docker（带 chromium，浏览器工具开箱可用）：

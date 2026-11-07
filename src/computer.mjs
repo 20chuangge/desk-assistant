@@ -141,9 +141,9 @@ export function lanAddress() {
 }
 
 /**
- * Where the desktop viewer lives. The hub box runs noVNC on 6080 (see
- * hub/vnc-setup.sh); overriding DESK_VNC_URL lets a tunnel or a different port
- * win without touching the UI.
+ * Where the machine's shared desktop viewer lives, for hubs without per-bot
+ * desktops (noVNC on 6080 by convention). Overriding DESK_VNC_URL lets a tunnel
+ * or a different port win without touching the UI.
  */
 export function desktopUrl() {
   if (process.env.DESK_VNC_URL) return process.env.DESK_VNC_URL;

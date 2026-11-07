@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Desk Hub on Linux / macOS. Same server as the desktop app, but reachable
-# from your laptop and phone. For a permanent install use desk-hub.service.
+# from your laptop and phone. For a permanent install run: sudo bash hub/setup-linux.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

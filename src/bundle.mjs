@@ -39,7 +39,9 @@ export function packApp({ root = appRoot(), outDir = os.tmpdir() } = {}) {
     throw new Error(`nothing to pack: ${root} has no src/ or public/`);
   }
   return new Promise((resolve, reject) => {
-    execFile('tar', ['-czf', out, '-C', root, ...present], { maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
+    // The archive name is relative (cwd = outDir): GNU tar reads "C:\..." in
+    // -f as host:path and fails, which bites whenever Git's tar is on PATH.
+    execFile('tar', ['-czf', path.basename(out), '-C', root, ...present], { cwd: outDir, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (err) {
         reject(new Error(`pack failed: ${String(stderr || err.message).slice(0, 300)}`));
         return;

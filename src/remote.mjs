@@ -1,21 +1,21 @@
 /**
- * remote.mjs - turn a blank SSH machine into a controllable desktop.
+ * remote.mjs - turn a machine you can SSH into into a Desk machine.
  *
- * The human adds a machine (address + VNC password) and optionally gives an SSH
- * account. We upload one setup script, run it with sudo, and report progress.
- * Nothing is required on the target side beforehand, and the SSH password is
- * held in memory for this one job only - it is never persisted or logged.
+ * The human gives an address and an SSH account. We find out what the target
+ * runs, upload the app and the one setup script for that OS, run it with sudo,
+ * and hand back the new hub's address and pairing code. Nothing is required on
+ * the target beforehand, and the SSH password is held in memory for this one
+ * job only - it is never persisted or logged.
  *
- * Readiness is a TCP probe of the noVNC port. The target's timezone is read at
- * the end of provisioning and cached next to the machine address, which is what
- * the UI uses for "follow the controlled machine" time.
+ * Linux (apt and dnf/yum families) is supported today; Windows is detected and
+ * refused with a clear message until its setup script exists.
  */
 
 import net from 'node:net';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { P, readJson, writeJsonAtomic, uid, nowIso } from './store.mjs';
+import { uid, nowIso } from './store.mjs';
 import { packApp, cleanupPack } from './bundle.mjs';
 
 // ssh2 is only needed when this machine PROVISIONS another one. Importing it
@@ -34,8 +34,7 @@ async function loadSsh2() {
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SCRIPT_FILE = path.join(HERE, '..', 'hub', 'desk-remote-setup.sh');
-const INFO_FILE = path.join(P.dataDir, 'remote-info.json');
+const SETUP_SCRIPTS = { linux: path.join(HERE, '..', 'hub', 'setup-linux.sh') };
 const JOB_TIMEOUT_MS = 20 * 60 * 1000;
 
 function remoteError(code, message) {
@@ -88,38 +87,6 @@ export function probeTcp(host, port, timeoutMs = 1800) {
     socket.once('timeout', () => finish(false));
     socket.once('error', () => finish(false));
   });
-}
-
-async function readInfoCache() {
-  const raw = await readJson(INFO_FILE, {});
-  return raw && typeof raw === 'object' ? raw : {};
-}
-
-async function writeInfoCache(cache) {
-  try {
-    await writeJsonAtomic(INFO_FILE, cache);
-  } catch (err) {
-    console.error('[remote] could not write info cache:', err.message);
-  }
-}
-
-/** Cached facts (timezone, last success) + a live TCP probe. */
-export async function remoteInfo({ host, port = 6080 } = {}) {
-  const address = assertHost(host);
-  const webPort = assertPort(port, 6080, 'port');
-  const cache = await readInfoCache();
-  const saved = cache[address] || {};
-  const probe = await probeTcp(address, webPort);
-  return {
-    host: address,
-    port: webPort,
-    reachable: probe.reachable,
-    latencyMs: probe.latencyMs,
-    timezone: saved.timezone || '',
-    ready: Boolean(saved.ready),
-    lastProvisionedAt: saved.lastProvisionedAt || null,
-    webPort: saved.webPort || webPort,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -256,9 +223,8 @@ export function createProvisioner() {
     message: job.message,
     step: job.step,
     totalSteps: job.totalSteps,
-    timezone: job.timezone || '',
     address: job.address || '',
-    webPort: job.webPort,
+    os: job.os || '',
     hubPort: job.hubPort,
     hubUrl: job.hubUrl || '',
     pairCode: job.pairCode || '',
@@ -278,170 +244,100 @@ export function createProvisioner() {
     if (job.log.length > 200) job.log.splice(0, job.log.length - 200);
   };
 
-  async function run(job, options) {
-    const {
-      host, sshPort, username, password, vncPassword, webPort,
-    } = options;
-    const hubPort = Number(options.hubPort) > 0 ? Number(options.hubPort) : 4390;
+  /** 'linux' | 'windows' | 'unknown', from whatever shell answers. */
+  async function detectOs(client) {
+    const probe = await execStream(client, 'uname -s', { timeoutMs: 15000 }).catch(() => ({ code: 1, output: '' }));
+    if (probe.code === 0 && /linux/i.test(probe.output)) return 'linux';
+    // Git for Windows / MSYS put a uname on PATH.
+    if (probe.code === 0 && /mingw|msys|cygwin|windows/i.test(probe.output)) return 'windows';
+    if (probe.code === 0 && probe.output.trim()) return 'unknown';
+    // Windows OpenSSH starts cmd.exe or PowerShell; both understand "ver".
+    const win = await execStream(client, 'ver', { timeoutMs: 15000 }).catch(() => ({ code: 1, output: '' }));
+    return /windows/i.test(win.output) ? 'windows' : 'unknown';
+  }
+
+  async function run(job, { host, sshPort, username, password, hubPort }) {
     let client = null;
     try {
       setProgress(job, '正在连接 SSH…');
       client = await connectSsh({ host, port: sshPort, username, password });
+
+      setProgress(job, '识别系统…');
+      job.os = await detectOs(client);
+      if (job.os === 'windows') {
+        throw remoteError('REMOTE_UNSUPPORTED_OS', '这是一台 Windows 机器。Windows 的自动配置还在做，目前只支持 Linux（Ubuntu/Debian/Rocky 等）。');
+      }
+      if (job.os !== 'linux') {
+        throw remoteError('REMOTE_UNSUPPORTED_OS', '认不出这台机器的系统（不是 Linux），暂时没法自动配置。');
+      }
 
       setProgress(job, '检查 sudo 权限…');
       const identity = await execStream(client, 'id -u', { timeoutMs: 15000 });
       const isRoot = identity.output.trim().split(/\s+/).pop() === '0';
       let sudoPrefix = '';
       if (!isRoot) {
-        const check = await execStream(client, "sudo -S -p '' -v", {
-          stdin: `${password}\n`,
-          timeoutMs: 15000,
-        });
+        const check = await execStream(client, "sudo -S -p '' -v", { stdin: `${password}\n`, timeoutMs: 15000 });
         if (check.code !== 0) {
-          throw remoteError(
-            'REMOTE_NO_SUDO',
-            '这个 SSH 账号不能 sudo；请换一个管理员账号，或先给该账号 sudo 权限。',
-          );
+          throw remoteError('REMOTE_NO_SUDO', '这个 SSH 账号不能 sudo；请换一个管理员账号，或先给该账号 sudo 权限。');
         }
         sudoPrefix = "sudo -S -p '' ";
       }
 
-      // --- 1) the hub itself -------------------------------------------------
-      // A blank machine gets the whole product, not just a VNC viewer.
       setProgress(job, '打包 Desk 程序…');
       const packed = await packApp();
       try {
         setProgress(job, `上传程序（${Math.max(1, Math.round(packed.bytes / 1024 / 1024))} MB）…`);
         const remotePkg = '/tmp/desk-hub.tar.gz';
+        const remoteScript = '/tmp/desk-setup.sh';
         await uploadFile(client, packed.file, remotePkg);
+        await uploadFile(client, SETUP_SCRIPTS[job.os], remoteScript);
 
-        const fullScript = await fsp.readFile(path.join(HERE, '..', 'hub', 'desk-full-setup.sh'), 'utf8');
-        const fullMarker = 'DESK_FULL_SCRIPT_EOF';
-        if (fullScript.includes(fullMarker)) throw remoteError('REMOTE_SCRIPT_INVALID', 'setup script contains its own marker');
-        const upFull = await execStream(client, [
-          `cat > /tmp/desk-full-setup.sh <<'${fullMarker}'`,
-          fullScript,
-          fullMarker,
-          'chmod 755 /tmp/desk-full-setup.sh',
-        ].join('\n'), { timeoutMs: 30000 });
-        if (upFull.code !== 0) throw remoteError('REMOTE_UPLOAD_FAILED', 'could not write the setup script on the target');
-
-        setProgress(job, '安装并启动 Hub（首次 2-5 分钟）…');
-        const full = await execStream(
+        setProgress(job, '安装并启动（首次 3-10 分钟）…');
+        const result = await execStream(
           client,
-          `${sudoPrefix}bash /tmp/desk-full-setup.sh ${shellQuote(String(hubPort))} ${shellQuote(remotePkg)}`,
+          `${sudoPrefix}bash ${remoteScript} --port ${shellQuote(String(hubPort))} --pkg ${remotePkg}`,
           {
             stdin: isRoot ? '' : `${password}\n`,
             onLine: (line) => {
               const text = line.trim();
               if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
             },
-            timeoutMs: JOB_TIMEOUT_MS,
           },
         );
-        const urlMatch = /DESK_HUB_URL=(\S+)/.exec(full.output);
-        const codeMatch = /DESK_PAIR_CODE=(\d{6,10})/.exec(full.output);
-        // The script verifies its own work now; trust its verdict over "exit 0".
-        const hubOk = /DESK_HUB_OK=1/.test(full.output);
-        const desktopOk = /DESK_DESKTOP_OK=1/.test(full.output);
-        job.hubUrl = urlMatch ? urlMatch[1] : `http://${host}:${hubPort}`;
-        job.pairCode = codeMatch ? codeMatch[1] : '';
-        job.desktopReady = desktopOk;
-        if (full.code !== 0 || !job.pairCode || !hubOk) {
-          const tail = full.output.trim().split(/\r?\n/).slice(-4).join(' / ') || `exit ${full.code}`;
-          throw remoteError('REMOTE_HUB_FAILED', `Hub 部署失败：${tail}`);
+        const value = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(result.output)?.[1]?.trim() || '';
+        // The address the script sees may be NAT-internal (a cloud VM); the one
+        // we just reached over SSH is the one this client can use.
+        job.hubUrl = `http://${host}:${hubPort}`;
+        job.pairCode = /^\d{6,10}$/.test(value('DESK_PAIR_CODE')) ? value('DESK_PAIR_CODE') : '';
+        if (value('DESK_OS')) job.os = value('DESK_OS');
+        // The script checks its own work; trust its verdict over "exit 0".
+        if (result.code !== 0 || value('DESK_HUB_OK') !== '1' || !job.pairCode) {
+          const said = result.output.trim().split(/\r?\n/).filter((line) => line.trim() && !/^DESK_/.test(line));
+          const tail = said.slice(-4).join(' / ') || `exit ${result.code}`;
+          throw remoteError('REMOTE_HUB_FAILED', `安装失败：${tail}`);
         }
-        if (!desktopOk) {
-          // Hub is fine; the bot screens will be blank until a desktop
-          // environment exists. Say so instead of reporting a clean success.
-          job.warning = 'Hub 已就绪，但这台机器没有桌面环境，Bot 桌面会是黑的';
+        if (value('DESK_DESKTOP_OK') !== '1') {
+          job.warning = '装好了，但桌面相关的程序没装全，Bot 的屏幕会是黑的';
         }
       } finally {
         cleanupPack(packed.file);
       }
 
-      // --- 2) the desktop ---------------------------------------------------
-      setProgress(job, '上传配置脚本…');
-      const script = await fsp.readFile(SCRIPT_FILE, 'utf8');
-      const marker = 'DESK_REMOTE_SCRIPT_EOF';
-      if (script.includes(marker)) throw remoteError('REMOTE_SCRIPT_INVALID', 'setup script contains its own marker');
-      const upload = [
-        `cat > /tmp/desk-remote-setup.sh <<'${marker}'`,
-        script,
-        marker,
-        'chmod 755 /tmp/desk-remote-setup.sh',
-      ].join('\n');
-      const uploaded = await execStream(client, upload, { timeoutMs: 30000 });
-      if (uploaded.code !== 0) throw remoteError('REMOTE_UPLOAD_FAILED', 'could not write the setup script on the target');
-
-      setProgress(job, '开始安装远程桌面（大约 3-10 分钟）…');
-      const command = `${sudoPrefix}bash /tmp/desk-remote-setup.sh ${shellQuote(vncPassword)} ${webPort}`;
-      const result = await execStream(client, command, {
-        stdin: isRoot ? '' : `${password}\n`,
-        onLine: (line) => {
-          const text = line.trim();
-          if (text) setProgress(job, text.slice(0, 300));
-        },
-        timeoutMs: JOB_TIMEOUT_MS,
-      });
-      if (result.code !== 0) {
-        const tail = result.output.trim().split(/\r?\n/).slice(-3).join(' / ') || `exit ${result.code}`;
-        throw remoteError('REMOTE_SETUP_FAILED', `远程配置失败：${tail}`);
-      }
-
-      setProgress(job, '读取被控机器时区…');
-      let timezone = '';
-      try {
-        const tz = await execStream(client, 'timedatectl show -p Timezone --value', { timeoutMs: 15000 });
-        timezone = tz.output.trim().split(/\r?\n/).pop() || '';
-      } catch {
-        /* timezone is a bonus, not a failure */
-      }
-
-      // The service starts with Restart=always; give it a few seconds to bind.
-      setProgress(job, '等待远程桌面端口就绪…');
+      setProgress(job, '确认这台电脑能连上它…');
       let reachable = false;
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const probe = await probeTcp(host, webPort, 1200);
-        if (probe.reachable) {
-          reachable = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+      for (let attempt = 0; attempt < 10 && !reachable; attempt += 1) {
+        reachable = (await probeTcp(host, hubPort, 1500)).reachable;
+        if (!reachable) await new Promise((resolve) => setTimeout(resolve, 1500));
       }
-
-      // websockify binds the web port even when its VNC backend is down, so a
-      // green TCP probe alone is NOT proof that the desktop is viewable.
-      setProgress(job, '检查 VNC 后端 5900…');
-      let vncReady = false;
-      if (reachable) {
-        try {
-          const check = await execStream(client, "ss -ltn 2>/dev/null | grep -q ':5900\\b' && echo ok || echo missing", { timeoutMs: 15000 });
-          vncReady = check.output.trim().split(/\s+/).pop() === 'ok';
-        } catch { /* keep the warning path */ }
-      }
-
-      job.timezone = timezone;
-      job.address = host;
-      const cache = await readInfoCache();
-      cache[host] = {
-        ...(cache[host] || {}),
-        timezone: timezone || cache[host]?.timezone || '',
-        webPort,
-        ready: reachable && vncReady,
-        lastProvisionedAt: nowIso(),
-      };
-      await writeInfoCache(cache);
-
       if (!reachable) {
         job.state = 'warning';
-        job.message = '系统配置完成，但 6080 端口还没响应；可能需要再等半分钟或检查防火墙。';
-      } else if (!vncReady && !job.hubUrl) {
+        job.message = `装好了，但从这台电脑连不上 ${host}:${hubPort}；检查两台机器之间的防火墙或安全组。`;
+      } else if (job.warning) {
         job.state = 'warning';
-        job.message = 'noVNC 网页已打开，但 VNC 后端 5900 未监听，桌面仍看不到。常见于 Wayland 会话：脚本已把默认会话固定为 Xorg，请重启机器并重新登录后重新运行。';
+        job.message = job.warning;
       } else {
         job.state = 'done';
-        job.message = `远程桌面已就绪${timezone ? `（时区 ${timezone}）` : ''}。`;
+        job.message = '已就绪。';
       }
       job.finishedAt = nowIso();
     } catch (err) {
@@ -451,8 +347,6 @@ export function createProvisioner() {
       job.log.push(`error: ${job.message}`);
     } finally {
       try { client?.end(); } catch { /* already gone */ }
-      // Never keep the password beyond the job.
-      job.password = undefined;
     }
   }
 
@@ -460,25 +354,21 @@ export function createProvisioner() {
     start(input = {}) {
       const host = assertHost(input.host);
       const sshPort = assertPort(input.sshPort, 22, 'sshPort');
-      const webPort = assertPort(input.webPort, 6080, 'webPort');
       const hubPort = assertPort(input.hubPort, 4390, 'hubPort');
       const username = assertCredential(input.username, 'SSH username');
       const password = assertCredential(input.password, 'SSH password');
-      const vncPassword = String(input.vncPassword || 'desk1234').slice(0, 64);
-      if (!vncPassword) throw remoteError('REMOTE_CREDENTIALS', 'VNC password is required');
 
       const job = {
         id: uid('prov'),
         state: 'running',
         message: '排队中…',
         step: 0,
-        totalSteps: 9,
+        totalSteps: 7,
         address: host,
-        webPort,
+        os: '',
         hubPort,
         hubUrl: '',
         pairCode: '',
-        timezone: '',
         startedAt: nowIso(),
         finishedAt: null,
         log: [],
@@ -490,7 +380,7 @@ export function createProvisioner() {
           jobs.delete(id);
         }
       }
-      run(job, { host, sshPort, username, password, vncPassword, webPort });
+      run(job, { host, sshPort, username, password, hubPort });
       return publicJob(job);
     },
     get(id) {

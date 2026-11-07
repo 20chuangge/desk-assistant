@@ -124,7 +124,7 @@ curl http://192.168.1.57:4390/api/health
 
 ```bash
 HOST=0.0.0.0 ASSIST_ALLOW_REMOTE=1 PORT=4390 node src/server.mjs
-# 或 hub/desk-hub.service / hub/docker-compose.yml
+# 或 sudo bash hub/setup-linux.sh / hub/docker-compose.yml
 ```
 
 公网访问**不要**直接开 4390，用 Tailscale 或 Cloudflare Tunnel。
