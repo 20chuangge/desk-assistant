@@ -11,6 +11,7 @@
  */
 
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
@@ -51,7 +52,7 @@ import {
 } from './bots.mjs';
 import { computerSnapshot, captureScreen } from './computer.mjs';
 import { createRegistry } from './tools.mjs';
-import { ApprovalQueue } from './approvals.mjs';
+import { ApprovalQueue, effectivePolicy } from './approvals.mjs';
 import { RoutineStore } from './routines.mjs';
 import { AgentRuntime, recoverInterruptedTurns } from './agent.mjs';
 import * as memory from './memory.mjs';
@@ -276,6 +277,20 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     if (typeof patch.timezone === 'string') clean.timezone = patch.timezone.slice(0, 64);
     if (typeof patch.panelOpen === 'boolean') clean.panelOpen = patch.panelOpen;
     if (UI_TABS.has(patch.tab)) clean.tab = patch.tab;
+    if (Array.isArray(patch.machines)) {
+      clean.machines = patch.machines.slice(0, 30).map((m) => ({
+        name: String(m?.name || '').slice(0, 80),
+        url: String(m?.url || '').slice(0, 200),
+        current: Boolean(m?.current),
+      })).filter((m) => m.name && m.url);
+    }
+    // A command only (machine_switch): never stored in uiState.
+    if (patch.switchMachine && typeof patch.switchMachine === 'object') {
+      clean.switchMachine = {
+        target: String(patch.switchMachine.target || '').slice(0, 200),
+        message: String(patch.switchMachine.message || '').slice(0, 4000),
+      };
+    }
     // Which machine the window is showing; reported by the UI, read by ui_get.
     if (patch.machine && typeof patch.machine === 'object') {
       clean.machine = {
@@ -289,16 +304,18 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
 
   state.uiView = () => ({ ...state.uiState });
   state.reportUi = (patch = {}) => {
-    const clean = cleanUiPatch(patch);
+    const { switchMachine, ...clean } = cleanUiPatch(patch);
     state.uiState = { ...state.uiState, ...clean, updatedAt: nowIso() };
     return state.uiView();
   };
   state.applyUi = (patch = {}, meta = {}) => {
-    const { machine, ...clean } = cleanUiPatch(patch); // the machine is reported, never commanded
+    // machine/machines are reported by the UI, never commanded.
+    const { machine, machines, ...clean } = cleanUiPatch(patch);
     const eventPatch = clean;
     if (!Object.keys(eventPatch).length) return state.uiView();
-    if (Object.keys(clean).length) {
-      state.uiState = { ...state.uiState, ...clean, updatedAt: nowIso() };
+    const { switchMachine, ...stored } = clean;
+    if (Object.keys(stored).length) {
+      state.uiState = { ...state.uiState, ...stored, updatedAt: nowIso() };
     }
     // Global event: every open window applies it, regardless of the chat it is
     // showing. The UI treats this as a command, not a transcript message.
@@ -314,6 +331,33 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
       if (!res.headersSent) errorResponse(res, 500, 'INTERNAL', 'unexpected server error');
       else res.end();
     });
+  });
+
+  // Bot desktops: websockify listens on 127.0.0.1 only; a viewer reaches it
+  // through this relay, which applies the same pairing check as the API.
+  server.on('upgrade', (req, socket, head) => {
+    const refuse = (status, text) => {
+      try { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); } catch { /* gone */ }
+    };
+    socket.on('error', () => socket.destroy());
+    let pathname = '';
+    try { pathname = new URL(req.url || '/', 'http://hub').pathname; } catch { return refuse(400, 'Bad Request'); }
+    const match = /^\/api\/bots\/([^/]+)\/desktop\/ws$/.exec(pathname);
+    if (!match) return refuse(404, 'Not Found');
+    if (!evaluateAuth(req, state.security).authorized) return refuse(401, 'Unauthorized');
+    const info = desktopInfo(safeDecode(match[1]));
+    if (!info.running || !info.webPort) return refuse(404, 'Not Found');
+    const upstream = net.connect(info.webPort, '127.0.0.1', () => {
+      // Replay the client's handshake to websockify; it answers the upgrade.
+      const lines = ['GET / HTTP/1.1'];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+      if (head && head.length) upstream.write(head);
+      upstream.pipe(socket);
+      socket.pipe(upstream);
+    });
+    upstream.on('error', () => socket.destroy());
+    socket.on('close', () => upstream.destroy());
   });
 
   return { server, state, port, host };
@@ -1014,20 +1058,26 @@ route('GET', /^\/api\/computer\/screenshot$/, async (_req, res) => {
 // --- policy ----------------------------------------------------------------
 
 route('GET', /^\/api\/policy$/, async (_req, _res, { state }) => ({
-  autoApproveAll: Boolean(state.config.policy?.autoApproveAll),
+  // autoApproveAll is what applies on THIS machine (remote: on by default).
+  mode: effectivePolicy(state.config.policy).mode,
+  autoApproveAll: effectivePolicy(state.config.policy).autonomous,
   autoApproveMedium: Boolean(state.config.policy?.autoApproveMedium),
   denyPatterns: state.config.policy?.denyPatterns?.length || 0,
 }));
 
 route('PUT', /^\/api\/policy$/, async (_req, _res, { body, state }) => {
   const next = { ...(state.config.policy || {}) };
-  if (typeof body?.autoApproveAll === 'boolean') next.autoApproveAll = body.autoApproveAll;
+  if (typeof body?.autoApproveAll === 'boolean') {
+    if (effectivePolicy(next).mode === 'remote') next.remoteAutonomy = body.autoApproveAll;
+    else next.autoApproveAll = body.autoApproveAll;
+  }
   if (typeof body?.autoApproveMedium === 'boolean') next.autoApproveMedium = body.autoApproveMedium;
   state.config.policy = next;
   await writeAssistantConfig({ ...state.config, workspaceDir: undefined });
   state.bus.emit({ type: 'policy.changed', autoApproveAll: Boolean(next.autoApproveAll) });
   return {
-    autoApproveAll: Boolean(next.autoApproveAll),
+    mode: effectivePolicy(next).mode,
+    autoApproveAll: effectivePolicy(next).autonomous,
     autoApproveMedium: Boolean(next.autoApproveMedium),
   };
 });

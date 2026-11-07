@@ -283,6 +283,7 @@ WorkingDirectory=$APP_DIR
 Environment=HOST=0.0.0.0
 Environment=ASSIST_ALLOW_REMOTE=1
 Environment=PORT=$PORT
+Environment=DESK_MACHINE_MODE=remote
 ${CHROME_BIN:+Environment=CHROME_PATH=$CHROME_BIN}
 ExecStart=$NODE_BIN src/server.mjs
 Restart=always

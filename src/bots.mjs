@@ -356,8 +356,9 @@ async function avatarFilesByBot() {
  */
 export const SEED_GRANTS = {
   chief: {
-    version: 3,
+    version: 4,
     tools: [
+      'machine_list', 'machine_switch',
       'bot_create', 'bot_update', 'bot_delete',
       'group_create', 'group_update', 'group_delete', 'group_list', 'group_post',
       'settings_get', 'settings_update', 'ui_get', 'ui_set',

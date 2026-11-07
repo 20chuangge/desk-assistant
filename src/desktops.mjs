@@ -20,7 +20,6 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 
 const BASE_DISPLAY = 120;      // :120 .. :159
@@ -172,7 +171,10 @@ export async function ensureDesktop(botId) {
     killByPattern(pattern);
   }
   const index = stableIndex(botId);
-  killByPattern(`websockify --web=/usr/share/novnc ${BASE_WEB_PORT + index}`);
+  // Older hubs bound "websockify --web=… <port>" on every interface; kill
+  // either form so the loopback-only bridge below can take the port.
+  killByPattern(`websockify.* ${BASE_WEB_PORT + index} `);
+  killByPattern(`websockify.*:${BASE_WEB_PORT + index} `);
   const display = BASE_DISPLAY + index;
   const vncPort = BASE_VNC_PORT + index;
   const webPort = BASE_WEB_PORT + index;
@@ -234,8 +236,11 @@ export async function ensureDesktop(botId) {
   procs.push(spawnChild('x11vnc', args, { stdio: ['ignore', childLog(botId, 'vnc'), childLog(botId, 'vnc')] }));
   for (let i = 0; i < 50 && !(await portOpen(vncPort)); i += 1) await sleep(100);
 
-  // 3) noVNC bridge for that one display
-  procs.push(spawnChild('websockify', ['--web=/usr/share/novnc', String(webPort), `127.0.0.1:${vncPort}`], {
+  // 3) WebSocket bridge for that one display, loopback only. Viewers never
+  // reach it directly: the hub relays /api/bots/<id>/desktop/ws to it after
+  // the same pairing check as the API, so nobody on the LAN can open a bot's
+  // screen without being paired.
+  procs.push(spawnChild('websockify', [`127.0.0.1:${webPort}`, `127.0.0.1:${vncPort}`], {
     stdio: ['ignore', childLog(botId, 'web'), childLog(botId, 'web')],
   }));
   for (let i = 0; i < 50 && !(await portOpen(webPort)); i += 1) await sleep(100);
@@ -253,19 +258,12 @@ function publicInfo(botId, entry) {
     webPort: entry.webPort,
     running: entry.procs.every((p) => !p.killed && p.exitCode === null),
     startedAt: entry.startedAt,
-    url: `http://${lanAddress()}:${entry.webPort}/vnc.html?autoconnect=1&resize=scale`,
+    // Same-origin viewer (the hub serves noVNC) that connects back through
+    // the hub's authenticated relay; relative so it works from any address.
+    url: `/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=${encodeURIComponent(`api/bots/${encodeURIComponent(botId)}/desktop/ws`)}`,
   };
 }
 
-function lanAddress() {
-  const nets = os.networkInterfaces();
-  for (const list of Object.values(nets)) {
-    for (const net of list || []) {
-      if (net.family === 'IPv4' && !net.internal) return net.address;
-    }
-  }
-  return '127.0.0.1';
-}
 
 /** Info for a bot's desktop without starting one. */
 export function desktopInfo(botId) {

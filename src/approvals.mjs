@@ -51,6 +51,48 @@ export const DEFAULT_DENY_PATTERNS = [
   '\\bRemove-Item\\b.*-Recurse\\b',
 ];
 
+/**
+ * On a remote machine (an idle PC or VM given to the assistant) bots run with
+ * sudo and without approval cards. Only what would cut the machine off or
+ * wipe it still waits for a human: losing the box is not something a bot can
+ * undo by itself.
+ */
+export const REMOTE_DENY_PATTERNS = [
+  '\\brm\\s+(-\\S+\\s+)*(/|/\\*|~|/home|/etc|/usr|/var|/boot|/opt/desk-hub)(\\s|$)', // rm of / or a system root
+  '\\bmkfs',
+  '\\bdd\\b[^|;&]*\\bof=/dev/',
+  '>\\s*/dev/(sd|nvme|vd|hd)[a-z]',
+  '\\b(shutdown|poweroff|halt)\\b',
+  '\\binit\\s+0\\b',
+  '\\bsystemctl\\s+(stop|disable|mask|kill)\\s+(ssh|sshd|desk-hub)(\\.service)?\\b',
+  '\\bufw\\s+(enable|default\\s+deny)\\b',
+  '\\biptables\\b.*-P\\s+INPUT\\s+DROP',
+  '\\b(passwd|userdel|deluser)\\b',
+  '\\b:\\(\\)\\s*\\{',
+];
+
+/** 'remote' on a machine set up by hub/setup-linux.sh, 'local' otherwise. */
+export function machineMode() {
+  return process.env.DESK_MACHINE_MODE === 'remote' ? 'remote' : 'local';
+}
+
+/**
+ * The approval policy that actually applies here. On this computer the human
+ * opts into autonomy (autoApproveAll); on a remote machine autonomy is the
+ * default and can be switched off (remoteAutonomy: false).
+ */
+export function effectivePolicy(configPolicy = {}) {
+  const mode = machineMode();
+  const remote = mode === 'remote';
+  return {
+    mode,
+    autonomous: remote ? configPolicy.remoteAutonomy !== false : Boolean(configPolicy.autoApproveAll),
+    denyPatterns: remote
+      ? REMOTE_DENY_PATTERNS
+      : (configPolicy.denyPatterns?.length ? configPolicy.denyPatterns : DEFAULT_DENY_PATTERNS),
+  };
+}
+
 /** Which deny patterns match this shell command (for the audit "reason"). */
 export function matchedDenyPatterns(command, patterns = DEFAULT_DENY_PATTERNS) {
   const text = String(command || '');

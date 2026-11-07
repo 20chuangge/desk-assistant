@@ -123,6 +123,7 @@ async function main() {
     await stage('unit checks', () =>
       unitChecks({ approvals, routines, skillsMod, memoryMod, toolsMod, botsMod, storeMod, home }),
     );
+    await stage('machines and policy', () => scenarioMachinesAndPolicy({ approvals, toolsMod }));
     await stage('streaming parser', () => scenarioStreamingParser({ modelMod }));
     await stage('crash recovery', scenarioCrashRecovery);
   } finally {
@@ -2647,3 +2648,66 @@ main().catch(async (err) => {
   await stopChild().catch(() => {});
   process.exitCode = 1;
 });
+
+async function scenarioMachinesAndPolicy({ approvals, toolsMod }) {
+  const registry = toolsMod.createRegistry({
+    workspaceDir: path.join(home, 'workspace'),
+    config: {},
+    getRuntime: () => { throw new Error('machine tools never start turns'); },
+    getRoutines: () => { throw new Error('machine tools never run routines'); },
+  });
+  // Bot desktops are reachable only through the hub's authenticated relay.
+  {
+    const desktopsSrc = await fsp.readFile(new URL('../src/desktops.mjs', import.meta.url), 'utf8');
+    check('websockify binds loopback only', /spawnChild\('websockify', \[`127\.0\.0\.1:\$\{webPort\}`/.test(desktopsSrc));
+    check('the bot desktop URL goes through the hub relay', desktopsSrc.includes('desktop/ws') && !/http:\/\/\$\{lanAddress\(\)\}:\$\{entry\.webPort\}/.test(desktopsSrc));
+    const unauth = await new Promise((resolve) => {
+      const req = http.request(`${base}/api/bots/chief/desktop/ws`, {
+        headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==' },
+      });
+      req.on('upgrade', () => resolve('upgraded'));
+      req.on('response', (res) => resolve(res.statusCode));
+      req.on('error', (err) => resolve(err.message));
+      req.end();
+    });
+    check('the desktop relay never upgrades without a running desktop', unauth === 404 || unauth === 401 || /socket hang up|ECONNRESET/.test(String(unauth)), String(unauth));
+  }
+
+  // Remote machines run autonomously; only machine-breaking commands still ask.
+  {
+    const prev = process.env.DESK_MACHINE_MODE;
+    process.env.DESK_MACHINE_MODE = 'remote';
+    const remote = approvals.effectivePolicy({ autoApproveAll: false, denyPatterns: ['\\bsudo\\b'] });
+    const decide = (command, policy) => approvals.classify('shell', { command }, {
+      baseRisk: 'MEDIUM', granted: true, autoApproveMedium: true, autoApproveAll: policy.autonomous, denyPatterns: policy.denyPatterns,
+    }).decision;
+    check('remote: autonomous by default even if autoApproveAll was false', remote.mode === 'remote' && remote.autonomous === true);
+    check('remote: sudo installs run without asking', decide('sudo apt-get install -y ffmpeg', remote) === 'auto');
+    check('remote: wiping or cutting off the machine still asks',
+      ['rm -rf /', 'sudo mkfs.ext4 /dev/sdb1', 'sudo shutdown -h now', 'sudo systemctl stop ssh', 'passwd ubuntu'].every((c) => decide(c, remote) === 'ask'));
+    check('remote: autonomy can be switched off', approvals.effectivePolicy({ remoteAutonomy: false }).autonomous === false);
+    process.env.DESK_MACHINE_MODE = '';
+    const local = approvals.effectivePolicy({});
+    check('local: sudo still asks', local.mode === 'local' && decide('sudo apt-get install x', local) === 'ask');
+    process.env.DESK_MACHINE_MODE = prev || '';
+  }
+
+  // The assistant can see the human's machines and hand work to one.
+  {
+    const seed = JSON.parse(await fsp.readFile(new URL('../config/bots/chief.json', import.meta.url), 'utf8'));
+    check('the assistant is granted machine_list and machine_switch', ['machine_list', 'machine_switch'].every((t) => seed.tools.includes(t)));
+    const reported = await api('/api/ui/state', { method: 'POST', body: { patch: { machines: [{ name: '本机', url: 'local', current: true }, { name: 'Ubuntu', url: 'http://10.0.0.5:4390' }] } } });
+    check('the window can report its machine list', reported.json?.ui?.machines?.length === 2, reported.text);
+    const ctx = { app: { uiView: () => ({ machines: reported.json.ui.machines }), applyUi: (patch) => { ctx.sent = patch; } }, bot: { id: 'chief' } };
+    const listed = await registry.get('machine_list').run({}, ctx);
+    check('machine_list returns the reported machines', listed.machines.length === 2);
+    await registry.get('machine_switch').run({ machine: 'ubuntu', task: '打开 bilibili' }, ctx);
+    check('machine_switch asks the window to switch and carries the task',
+      ctx.sent?.switchMachine?.target === 'http://10.0.0.5:4390' && ctx.sent.switchMachine.message === '打开 bilibili');
+    const missing = await errorCode(() => registry.get('machine_switch').run({ machine: 'nowhere' }, ctx));
+    check('machine_switch refuses an unknown machine', missing === 'MACHINE_NOT_FOUND', missing);
+    const stored = await api('/api/ui/state');
+    check('a switch command is never stored as UI state', !('switchMachine' in (stored.json || {})));
+  }
+
+}

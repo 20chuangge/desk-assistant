@@ -608,6 +608,7 @@ window.DESK_I18N_EN = {
   // --- settings -----------------------------------------------------------
   "这个版本的服务端还没有设置接口（404），下面显示的是当前生效的只读信息，保存/测试暂不可用。": "This server has no settings API yet (404). Below is the current configuration, read-only; save and test are unavailable.",
   "读取设置失败：{0}": "Couldn't read settings: {0}",
+  "这是一台远程机器，默认完全自主：助手可以用 sudo、装软件，不再逐条问你。只有会让机器失联或数据全毁的操作（例如格式化磁盘、关机、停掉 SSH）仍然会问。": "This is a remote machine, fully autonomous by default: bots may use sudo and install software without asking. Only actions that could cut the machine off or wipe it (formatting a disk, shutting down, stopping SSH) still ask.",
   "完全自主已开启：不再询问审批": "Fully autonomous: no more approval prompts",
   "已恢复审批确认": "Approval prompts are back on",
   "openai 需要一个模型名，例如 gpt-4o-mini。": "OpenAI needs a model name, e.g. gpt-4o-mini.",
@@ -655,6 +656,13 @@ window.DESK_I18N_EN = {
   // --- machines -----------------------------------------------------------
   "在「{0}」上，助手会自己把事情做完": "On “{0}”, bots finish the job on their own",
   "切换失败": "Switch failed",
+  "找不到机器「{0}」": "No machine called “{0}”",
+  "正在切换到「{0}」…": "Switching to “{0}”…",
+  "把任务交给另一台机器": "Hand work to another machine",
+  "想切到另一台机器，把任务交给那里的助理": "Wants to switch to another machine and hand the task to its assistant",
+  "窗口会切到那台机器，那里的助理接着做。": "The window switches to that machine and its assistant takes over.",
+  "查看机器": "List machines",
+  "想看看有哪些机器": "Wants to see your machines",
   "地址格式不对": "That address doesn't look right",
   "名字不能为空": "Name can't be empty",
   "在夜班客户端里才能切换机器": "Switch machines in the Nightshift app",

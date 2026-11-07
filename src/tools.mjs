@@ -1326,6 +1326,52 @@ export function createRegistry(deps) {
     },
   });
 
+  // --- machines -----------------------------------------------------------
+  // The machine list lives in the human's desktop app; the window reports it.
+
+  add({
+    name: 'machine_list',
+    description: 'List the machines the human can switch between (from their desktop app): name, address, and which one this chat is on. Each machine has its own bots.',
+    risk: RISK.LOW,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      const ui = ctx.app?.uiView?.() || {};
+      const machines = ui.machines || [];
+      if (!machines.length) {
+        return { machines: [], note: 'No machine list: the human is not in the desktop app, or it has not reported yet. Ask them to switch machines from the top-left of the window.' };
+      }
+      return { machines, current: ui.machine || null };
+    },
+  });
+
+  add({
+    name: 'machine_switch',
+    description: 'Move work to another machine: switch the human\'s window to it and hand the task to that machine\'s primary bot, which then does it there. Use this instead of SSH when the human asks for something on another of their machines. machine is a name or address from machine_list; task is the full instruction for the bot over there (it does not see this conversation).',
+    risk: RISK.MEDIUM,
+    parameters: {
+      type: 'object',
+      properties: {
+        machine: { type: 'string', description: 'Machine name or address from machine_list.' },
+        task: { type: 'string', description: 'Complete instruction for that machine\'s assistant.' },
+      },
+      required: ['machine'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (!ctx.app?.applyUi) throw toolError('APP_UNAVAILABLE', 'the window is not connected');
+      const machines = ctx.app.uiView?.().machines || [];
+      const wanted = String(args?.machine || '').trim().toLowerCase();
+      const match = machines.find((m) => m.name.toLowerCase() === wanted || m.url.toLowerCase() === wanted)
+        || machines.find((m) => m.name.toLowerCase().includes(wanted) || m.url.toLowerCase().includes(wanted));
+      if (!match) {
+        throw toolError('MACHINE_NOT_FOUND', `no machine "${args?.machine}"; known: ${machines.map((m) => m.name).join(', ') || 'none reported'}`);
+      }
+      if (match.current) return { ok: true, machine: match.name, note: 'already on this machine; do the task here' };
+      ctx.app.applyUi({ switchMachine: { target: match.url, message: String(args?.task || '') } }, { by: ctx.bot?.id });
+      return { ok: true, machine: match.name, handedOff: Boolean(args?.task) };
+    },
+  });
+
   // --- control ------------------------------------------------------------
 
   add({

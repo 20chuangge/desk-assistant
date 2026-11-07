@@ -30,7 +30,7 @@ import {
   sessionFile,
   turnFile,
 } from './store.mjs';
-import { classify, DECISION } from './approvals.mjs';
+import { effectivePolicy, classify, DECISION } from './approvals.mjs';
 
 const MAX_TOOL_OUTPUT = 12000;
 const RECOVERY_NOTE =
@@ -63,6 +63,18 @@ function renderGroupSection(bot, group, groupRole) {
       ? 'Only you are running right now. Other members do not run unless you message them with bot_message; relay what matters into the group with group_post.'
       : 'If a short status line would help the whole group, you may post one with group_post; otherwise just answer the coordinator.',
   ].join('\n');
+}
+
+/** The human's machines, as their desktop app reported them. */
+function machinesSection(ui) {
+  const machines = ui?.machines || [];
+  if (machines.length < 2) return [];
+  return [
+    '## The human\'s machines',
+    ...machines.map((m) => `- ${m.name} (${m.url === 'local' ? 'their own computer' : m.url})${m.current ? ' <- this chat runs here' : ''}`),
+    'Each machine has its own bots, files and desktops. When the human asks for something on another machine, call machine_switch with a complete task for the assistant there; do not SSH in yourself.',
+    '',
+  ];
 }
 
 export class AgentRuntime {
@@ -157,6 +169,10 @@ export class AgentRuntime {
       '## Tools you have',
       toolDigest,
       '',
+      ...machinesSection(this.getApp()?.uiState),
+      ...(effectivePolicy(this.config.policy).mode === 'remote'
+        ? ['## This machine', 'This is a remote machine dedicated to you. You may use sudo (it needs no password) and install what you need. Act without asking; only commands that could cut the machine off or wipe it wait for a human.', '']
+        : ['## This machine', "This is the human's own computer. Anything that changes it beyond the workspace waits for their approval.", '']),
       '## Approval boundary',
       'Every tool call is classified before it runs:',
       '- LOW runs immediately.',
@@ -584,17 +600,15 @@ export class AgentRuntime {
     const granted = this.registry.isGranted(bot, name);
     const riskInfo = typeof tool.risk === 'function' ? tool.risk(args, ctx) : { risk: tool.risk };
 
+    // Whole-machine autonomy: on a remote machine by default, on this computer
+    // only when the human turns it on. The denylist still asks either way.
+    const machine = effectivePolicy(this.config.policy);
     const verdict = classify(name, args, {
       baseRisk: riskInfo.risk,
       granted,
-      autoApproveMedium: Boolean(bot.policy?.autoApproveMedium) || Boolean(this.config.policy?.autoApproveAll),
-      // Whole-machine autonomy: the box is dedicated to the assistant, so the
-      // human does not want to answer cards. Config-level flag; the denylist
-      // still asks, so "rm -rf" can never slip through silently.
-      autoApproveAll: Boolean(this.config.policy?.autoApproveAll),
-      denyPatterns: bot.policy?.denyPatterns?.length
-        ? bot.policy.denyPatterns
-        : this.config.policy?.denyPatterns || [],
+      autoApproveMedium: Boolean(bot.policy?.autoApproveMedium) || machine.autonomous,
+      autoApproveAll: machine.autonomous,
+      denyPatterns: bot.policy?.denyPatterns?.length ? bot.policy.denyPatterns : machine.denyPatterns,
       extraRiskReason: riskInfo.reason || '',
       unattended: ctx.unattended,
     });

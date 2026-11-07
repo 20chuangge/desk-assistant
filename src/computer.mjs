@@ -146,8 +146,9 @@ export function lanAddress() {
  * or a different port win without touching the UI.
  */
 export function desktopUrl() {
-  if (process.env.DESK_VNC_URL) return process.env.DESK_VNC_URL;
-  return `http://${lanAddress()}:6080/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000`;
+  // Only a viewer someone actually set up. Advertising :6080 on every machine
+  // was why Windows showed a black, never-connecting preview.
+  return process.env.DESK_VNC_URL || null;
 }
 
 /** The JSON body behind GET /api/computer. */

@@ -67,6 +67,12 @@ globalThis.window = {};
 await import(new URL('../public/i18n-en.js', import.meta.url));
 const dict = globalThis.window.DESK_I18N_EN;
 const missing = [...keys.keys()].filter((k) => !(k in dict) && !IGNORE.has(k));
+// A repeated key silently wins over the earlier one: "机器" once became "Machine" in the nav.
+const source = fs.readFileSync(path.join(root, 'public', 'i18n-en.js'), 'utf8');
+const seen = new Set();
+const duplicates = [];
+for (const m of source.matchAll(/^\s*"((?:[^"\\]|\\.)*)":/gm)) { if (seen.has(m[1])) duplicates.push(m[1]); seen.add(m[1]); }
+if (duplicates.length) { console.log('FAIL  duplicate keys in public/i18n-en.js: ' + duplicates.join(', ')); process.exitCode = 1; }
 if (missing.length) {
   console.log(`FAIL  ${missing.length} UI string(s) have no English in public/i18n-en.js:`);
   for (const k of missing) console.log(`  ${k}`);

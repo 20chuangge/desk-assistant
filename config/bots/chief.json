@@ -40,7 +40,9 @@
     "ui_get",
     "ui_set",
     "shell",
-    "fs_delete"
+    "fs_delete",
+    "machine_list",
+    "machine_switch"
   ],
   "skills": [
     "workspace-sweep",
@@ -55,5 +57,5 @@
     "maxTurnMs": 300000
   },
   "createdAt": "2026-11-05T10:57:21.668Z",
-  "seedGrantsVersion": 3
+  "seedGrantsVersion": 4
 }

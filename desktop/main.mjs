@@ -38,6 +38,8 @@ let quitting = false;
 let serverPort = 0;
 /** The machine the window shows: '' is this computer, otherwise a hub URL. */
 let remoteHub = '';
+/** A task a bot handed to another machine: delivered once that machine loads. */
+let pendingTask = null;
 
 // ---------------------------------------------------------------------------
 // machines
@@ -396,13 +398,14 @@ function machineLabel(url) {
  * Point the window at another machine ('' = this computer). The bots, memory
  * and screen all come from that machine's server, so this IS the switch.
  */
-async function switchTo(url) {
+async function switchTo(url, message = '') {
   const target = url ? normalizeHub(url) : '';
   if (url && !target) return { ok: false, error: '地址格式不对' };
   if (target && !(await probeHub(target))) {
     return { ok: false, error: L(`连不上 ${machineLabel(target)}（机器关机了，或网络不通）`, `Can't reach ${machineLabel(target)} (it's off, or the network is down)`) };
   }
   remoteHub = target;
+  pendingTask = String(message || '').trim() ? { machine: target, text: String(message).trim().slice(0, 4000) } : null;
   writeHub(target);
   if (target) rememberMachine(target, { lastUsed: new Date().toISOString() });
   bootLog(`switch → ${target || 'local'}`);
@@ -510,8 +513,15 @@ ipcMain.handle('desk:list-machines', () => ({
   machines: readMachines(),
 }));
 
-ipcMain.handle('desk:switch-hub', (_event, url) => switchTo(url));
-ipcMain.handle('desk:use-local', () => switchTo(''));
+ipcMain.handle('desk:switch-hub', (_event, url, message) => switchTo(url, message));
+ipcMain.handle('desk:use-local', (_event, message) => switchTo('', message));
+// Handed over once, and only to the machine it was meant for.
+ipcMain.handle('desk:take-pending-message', () => {
+  if (!pendingTask || pendingTask.machine !== remoteHub) return '';
+  const { text } = pendingTask;
+  pendingTask = null;
+  return text;
+});
 
 // A machine Desk just provisioned: remember it under the human's name and pair
 // with the code its installer printed, so switching to it is one click.

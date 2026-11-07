@@ -14,8 +14,9 @@ contextBridge.exposeInMainWorld('deskShell', {
 // silently does nothing.
 contextBridge.exposeInMainWorld('desk', {
   listMachines: () => ipcRenderer.invoke('desk:list-machines'),
-  switchHub: (url) => ipcRenderer.invoke('desk:switch-hub', url),
-  useLocal: () => ipcRenderer.invoke('desk:use-local'),
+  switchHub: (url, message) => ipcRenderer.invoke('desk:switch-hub', url, message),
+  useLocal: (message) => ipcRenderer.invoke('desk:use-local', message),
+  takePendingMessage: () => ipcRenderer.invoke('desk:take-pending-message'),
   addMachine: (machine) => ipcRenderer.invoke('desk:add-machine', machine),
   renameMachine: (url, name) => ipcRenderer.invoke('desk:rename-machine', { url, name }),
   removeMachine: (url) => ipcRenderer.invoke('desk:remove-machine', url),
