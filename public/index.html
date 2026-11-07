@@ -2446,6 +2446,37 @@
 
   /* the empty chat shows who you are talking to */
   .empty-avatar { width: 54px; height: 54px; margin-bottom: 18px; border-radius: 14px; }
+
+  /* attachments ------------------------------------------------------ */
+  .attach-btn {
+    flex: none; align-self: flex-end; width: 34px; height: 34px; margin: 0 2px 2px 0;
+    display: grid; place-items: center; border-radius: 10px; border: 0; background: transparent; color: var(--dim);
+  }
+  .attach-btn:hover { background: var(--panel-2); color: var(--text); }
+  .attach-strip { display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; margin: 0 auto 8px; width: 100%; }
+  .att-chip {
+    display: flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 6px 4px 4px;
+    border: 1px solid var(--border-soft); border-radius: 10px; background: var(--panel); font-size: 12px; color: var(--muted);
+  }
+  .att-chip img { width: 30px; height: 30px; object-fit: cover; border-radius: 6px; }
+  .att-chip .att-icon { width: 30px; text-align: center; }
+  .att-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-chip.busy { opacity: 0.7; }
+  .att-chip.bad { border-color: var(--red); color: var(--red); }
+  .att-x { border: 0; background: transparent; color: var(--dim); font-size: 11px; padding: 2px 4px; border-radius: 6px; }
+  .att-x:hover { color: var(--text); background: var(--panel-2); }
+  .att-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .bubble.only-att .att-list { margin-top: 0; }
+  .att-img img { display: block; max-width: 220px; max-height: 180px; border-radius: 10px; object-fit: cover; }
+  .att-file {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06); color: inherit; text-decoration: none; max-width: 260px;
+  }
+  html[data-theme="light"] .att-file { background: rgba(0, 0, 0, 0.05); }
+  .att-meta { display: flex; flex-direction: column; min-width: 0; }
+  .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+  .att-size { font-size: 11px; opacity: 0.7; }
+  .chat.dragging .composer-box { outline: 2px dashed var(--border-strong); outline-offset: 4px; }
 </style>
 </head>
 <body>
@@ -2558,7 +2589,12 @@
       </div>
 
       <div class="composer">
+        <div class="attach-strip" id="attach-strip" hidden></div>
         <div class="composer-box">
+          <button class="attach-btn" id="attach-btn" type="button" title="添加文件或图片" aria-label="添加文件或图片">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>
+          </button>
+          <input type="file" id="attach-input" multiple hidden />
           <textarea id="composer" rows="1" placeholder="告诉助理要做什么…" aria-label="消息"></textarea>
           <button class="send-btn" id="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
@@ -5021,12 +5057,117 @@ function renderItem(item) {
   }
 }
 
+/** "[附件]" block the server appends for the bot: split it off for display. */
+const ATTACH_MARK = '\n\n[附件] 都在共享工作区里：\n';
+function splitAttachments(text) {
+  const raw = String(text || '');
+  const at = raw.indexOf(ATTACH_MARK);
+  if (at < 0) return { text: raw, files: [] };
+  const files = raw.slice(at + ATTACH_MARK.length).split('\n')
+    .map((line) => /^- (\S+?)（(图片|文件)，([^）]+)）$/.exec(line.trim()))
+    .filter(Boolean)
+    .map(([, p, kind, size]) => ({ path: p, image: kind === '图片', size, name: p.split('/').pop() }));
+  const body = raw.slice(0, at);
+  return { text: body === '（见附件）' ? '' : body, files };
+}
+
+function attachmentNode(file) {
+  const url = `/api/workspace/file?path=${encodeURIComponent(file.path)}`;
+  if (file.image) {
+    const a = el('a', 'att-img');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = file.name;
+    img.loading = 'lazy';
+    a.appendChild(img);
+    return a;
+  }
+  const a = el('a', 'att-file');
+  a.href = url;
+  a.setAttribute('download', file.name);
+  a.appendChild(el('span', 'att-icon', '📄'));
+  const meta = el('span', 'att-meta');
+  meta.appendChild(el('span', 'att-name', file.name));
+  meta.appendChild(el('span', 'att-size', file.size));
+  a.appendChild(meta);
+  return a;
+}
+
 function userRow(item) {
   const row = el('div', 'row user');
-  const wrap = el('div', 'bubble', item.text);
+  const { text, files } = splitAttachments(item.text);
+  const wrap = el('div', 'bubble', text);
   wrap.title = fmtClock(item.ts);
+  if (files.length) {
+    const box = el('div', 'att-list');
+    files.forEach((f) => box.appendChild(attachmentNode(f)));
+    if (text) wrap.appendChild(box);
+    else { wrap.textContent = ''; wrap.appendChild(box); wrap.classList.add('only-att'); }
+  }
   row.appendChild(wrap);
   return row;
+}
+
+/* ---------------------------------------------------------------------
+   attachments in the composer: pick, paste or drop; each file uploads at
+   once into the workspace and waits as a chip until the message is sent
+   --------------------------------------------------------------------- */
+state.pendingFiles = [];
+
+function renderAttachStrip() {
+  const strip = $('attach-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  strip.hidden = state.pendingFiles.length === 0;
+  for (const f of state.pendingFiles) {
+    const chip = el('div', `att-chip${f.status === 'uploading' ? ' busy' : ''}${f.status === 'error' ? ' bad' : ''}`);
+    if (f.preview) {
+      const img = document.createElement('img');
+      img.src = f.preview;
+      img.alt = '';
+      chip.appendChild(img);
+    } else {
+      chip.appendChild(el('span', 'att-icon', '📄'));
+    }
+    chip.appendChild(el('span', 'att-chip-name', f.status === 'uploading' ? '上传中…' : f.status === 'error' ? `上传失败：${f.error}` : f.name));
+    const x = el('button', 'att-x', '✕');
+    x.type = 'button';
+    x.setAttribute('aria-label', '移除');
+    x.addEventListener('click', () => {
+      state.pendingFiles = state.pendingFiles.filter((p) => p !== f);
+      if (f.preview) URL.revokeObjectURL(f.preview);
+      renderAttachStrip();
+    });
+    chip.appendChild(x);
+    strip.appendChild(chip);
+  }
+}
+
+async function addFiles(fileList) {
+  for (const file of [...fileList].slice(0, 10)) {
+    if (state.pendingFiles.length >= 10) { toast('一条消息最多 10 个附件', true); break; }
+    if (file.size > 25 * 1024 * 1024) { toast(`「${file.name}」超过 25 MB`, true); continue; }
+    const entry = { name: file.name || 'image.png', status: 'uploading', preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '' };
+    state.pendingFiles.push(entry);
+    renderAttachStrip();
+    try {
+      const res = await fetch('/api/uploads', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(entry.name) },
+        body: file,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+      Object.assign(entry, { status: 'ready', path: data.path, name: data.name });
+    } catch (err) {
+      Object.assign(entry, { status: 'error', error: err.message });
+    }
+    renderAttachStrip();
+  }
 }
 
 function assistantRow(text, { system = false, streaming = false } = {}) {
@@ -5313,8 +5454,13 @@ function toolChip(item) {
 async function send() {
   const input = $('composer');
   const text = input.value.trim();
-  if (!text || state.sending || composerBlocked()) return;
+  if (state.pendingFiles.some((f) => f.status === 'uploading')) { toast('附件还在上传，稍等一下'); return; }
+  const files = state.pendingFiles.filter((f) => f.status === 'ready');
+  if ((!text && !files.length) || state.sending || composerBlocked()) return;
   if (!isGroupMode() && !state.botId) return;
+  const attachments = files.map((f) => ({ path: f.path }));
+  state.pendingFiles = [];
+  renderAttachStrip();
 
   state.sending = true;
   $('send-btn').disabled = true;
@@ -5324,14 +5470,17 @@ async function send() {
 
   // Optimistic user bubble; the authoritative reload happens on turn.end.
   if (messagesEl.querySelector('.empty')) messagesEl.innerHTML = '';
-  messagesEl.appendChild(userRow({ text, ts: new Date().toISOString() }));
+  const shown = files.length
+    ? `${text || '（见附件）'}${ATTACH_MARK}${files.map((f) => `- ${f.path}（${/\.(png|jpe?g|gif|webp)$/i.test(f.path) ? '图片' : '文件'}，…）`).join('\n')}`
+    : text;
+  messagesEl.appendChild(userRow({ text: shown, ts: new Date().toISOString() }));
   scrollToBottom(true);
 
   try {
     if (isGroupMode()) {
-      await api(`/api/groups/${encodeURIComponent(state.groupId)}/message`, { method: 'POST', body: { text } });
+      await api(`/api/groups/${encodeURIComponent(state.groupId)}/message`, { method: 'POST', body: { text, attachments } });
     } else {
-      await api(`/api/bots/${state.botId}/message`, { method: 'POST', body: { text } });
+      await api(`/api/bots/${state.botId}/message`, { method: 'POST', body: { text, attachments } });
     }
   } catch (err) {
     if (err.status !== 401) toast(err.status === 404 ? '服务端还没有群组消息接口（404）' : err.message, true);
@@ -7634,6 +7783,19 @@ function wireChrome() {
   });
 
   // composer
+  $('attach-btn').addEventListener('click', () => $('attach-input').click());
+  $('attach-input').addEventListener('change', (event) => { addFiles(event.target.files); event.target.value = ''; });
+  $('composer').addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (files.length) { event.preventDefault(); addFiles(files); }
+  });
+  const dropZone = document.querySelector('.chat');
+  dropZone?.addEventListener('dragover', (event) => { if (event.dataTransfer?.types?.includes('Files')) { event.preventDefault(); dropZone.classList.add('dragging'); } });
+  dropZone?.addEventListener('dragleave', (event) => { if (event.target === dropZone) dropZone.classList.remove('dragging'); });
+  dropZone?.addEventListener('drop', (event) => {
+    dropZone.classList.remove('dragging');
+    if (event.dataTransfer?.files?.length) { event.preventDefault(); addFiles(event.dataTransfer.files); }
+  });
   $('send-btn').addEventListener('click', send);
   $('composer').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

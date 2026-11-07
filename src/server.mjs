@@ -717,7 +717,7 @@ route('POST', /^\/api\/bots\/(?<id>[^/]+)\/message$/, async (_req, res, { params
   const bot = await getBot(params.id);
   if (!bot) throw httpError(404, 'BOT_NOT_FOUND', `no bot with id "${params.id}"`);
 
-  const text = String(body?.text ?? '').trim();
+  const text = withAttachments(String(body?.text ?? '').trim(), await checkAttachments(state, body?.attachments));
   if (!text) throw httpError(400, 'EMPTY_MESSAGE', 'text is required');
   if (text.length > 20000) throw httpError(400, 'MESSAGE_TOO_LONG', 'text is limited to 20000 characters');
 
@@ -731,6 +731,102 @@ route('POST', /^\/api\/bots\/(?<id>[^/]+)\/message$/, async (_req, res, { params
 
   return { turnId, botId: bot.id };
 });
+
+// --- attachments -----------------------------------------------------------
+//
+//   POST /api/uploads   raw bytes, header x-file-name (URI-encoded)
+//                       -> {path:"uploads/2026-11-07/a.png", name, size, mime}
+//   GET  /api/workspace/file?path=uploads/…   -> the bytes (thumbnails, downloads)
+//
+// Files land in the shared workspace, so every bot can open them with its
+// normal file tools. A message carries them as a "[附件]" block the bot reads
+// and the UI renders as thumbnails / file cards.
+
+const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const MIME_BY_EXT = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8', '.json': 'application/json', '.zip': 'application/zip',
+};
+const mimeOf = (name) => MIME_BY_EXT[path.extname(String(name)).toLowerCase()] || 'application/octet-stream';
+
+function safeUploadName(raw) {
+  const base = path.basename(String(raw || 'file')).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim();
+  return (base || 'file').slice(0, 120);
+}
+
+/** A workspace-relative path that must stay inside the workspace. */
+function workspaceFile(state, rel) {
+  const root = path.resolve(state.workspaceDir);
+  const abs = path.resolve(root, String(rel || ''));
+  if (abs !== root && !abs.startsWith(root + path.sep)) throw httpError(400, 'PATH_OUTSIDE_WORKSPACE', 'path must stay inside the workspace');
+  return abs;
+}
+
+route(
+  'POST',
+  /^\/api\/uploads$/,
+  async (req, _res, { state }) => {
+    let name = 'file';
+    try { name = decodeURIComponent(String(req.headers['x-file-name'] || 'file')); } catch { /* keep default */ }
+    name = safeUploadName(name);
+    const bytes = await readRawBody(req, UPLOAD_MAX_BYTES, {
+      code: 'UPLOAD_TOO_LARGE',
+      message: `an attachment must be ${UPLOAD_MAX_BYTES / (1024 * 1024)} MB or smaller`,
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    const dir = workspaceFile(state, path.join('uploads', day));
+    await fsp.mkdir(dir, { recursive: true });
+    const ext = path.extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    let candidate = name;
+    for (let i = 1; fs.existsSync(path.join(dir, candidate)); i += 1) candidate = `${stem}-${i}${ext}`;
+    await fsp.writeFile(path.join(dir, candidate), bytes);
+    return { path: `uploads/${day}/${candidate}`, name: candidate, size: bytes.length, mime: mimeOf(candidate) };
+  },
+  { rawBody: true },
+);
+
+route('GET', /^\/api\/workspace\/file$/, async (_req, res, { state, query }) => {
+  const abs = workspaceFile(state, query.get('path'));
+  let data;
+  try { data = await fsp.readFile(abs); } catch { return errorResponse(res, 404, 'FILE_NOT_FOUND', 'no such file in the workspace'); }
+  const mime = mimeOf(abs);
+  res.writeHead(200, {
+    // Never let an uploaded HTML/SVG run as part of the app.
+    'content-type': mime === 'image/svg+xml' ? 'text/plain; charset=utf-8' : mime,
+    'content-length': data.length,
+    'x-content-type-options': 'nosniff',
+    'content-disposition': mime.startsWith('image/') && mime !== 'image/svg+xml' ? 'inline' : `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`,
+    'cache-control': 'private, max-age=3600',
+  });
+  res.end(data);
+  return undefined;
+});
+
+/** Attachments named in a message must be files we stored. */
+async function checkAttachments(state, list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  if (list.length > 10) throw httpError(400, 'TOO_MANY_ATTACHMENTS', 'at most 10 attachments per message');
+  const out = [];
+  for (const item of list) {
+    const rel = String(item?.path || '');
+    if (!/^uploads\//.test(rel)) throw httpError(400, 'BAD_ATTACHMENT', 'attachments must be uploaded first');
+    const abs = workspaceFile(state, rel);
+    let size = 0;
+    try { size = (await fsp.stat(abs)).size; } catch { throw httpError(400, 'BAD_ATTACHMENT', `no uploaded file at ${rel}`); }
+    out.push({ path: rel.replace(/\\/g, '/'), mime: mimeOf(rel), size });
+  }
+  return out;
+}
+
+/** The text the bot sees: what you wrote, then where each attachment is. */
+function withAttachments(text, attachments) {
+  if (!attachments.length) return text;
+  const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  const lines = attachments.map((a) => `- ${a.path}（${a.mime.startsWith('image/') ? '图片' : '文件'}，${kb(a.size)}）`);
+  return `${text || '（见附件）'}\n\n[附件] 都在共享工作区里：\n${lines.join('\n')}`;
+}
 
 // --- bot avatars -----------------------------------------------------------
 //
@@ -926,7 +1022,7 @@ route('POST', /^\/api\/groups\/(?<id>[^/]+)\/message$/, async (_req, _res, { par
   const group = await groups.getGroup(params.id);
   if (!group) throw httpError(404, 'GROUP_NOT_FOUND', `no group with id "${params.id}"`);
 
-  const text = String(body?.text ?? '').trim();
+  const text = withAttachments(String(body?.text ?? '').trim(), await checkAttachments(state, body?.attachments));
   if (!text) throw httpError(400, 'EMPTY_MESSAGE', 'text is required');
   if (text.length > 20000) throw httpError(400, 'MESSAGE_TOO_LONG', 'text is limited to 20000 characters');
 
