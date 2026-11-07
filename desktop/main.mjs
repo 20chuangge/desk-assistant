@@ -310,7 +310,9 @@ function launchServer({ host, port }) {
       if (quitting) return;
       if (!ready) {
         clearTimeout(timer);
-        reject(new Error(stderrTail.split('\n').filter(Boolean).pop() || `exit ${code ?? signal}`));
+        // Node prints the error object over many lines; keep the one that names it.
+        const lines = stderrTail.split('\n').map((l) => l.trim()).filter(Boolean);
+        reject(new Error(lines.find((l) => /\bError\b|EACCES|EADDRINUSE/.test(l)) || lines.pop() || `exit ${code ?? signal}`));
         return;
       }
       // It was running and died: keep the app alive and bring the server back
