@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  setup-windows.ps1 —— 把一台 Windows 电脑变成夜班 Hub
 #  支持：Windows 10 1803+ / Windows 11 / Windows Server 2019+（x64、arm64）
 #
@@ -34,6 +34,9 @@ try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 function Say([string]$text) { Write-Output "[desk] $text" }
 function Warn([string]$text) { Write-Output "[desk] 警告：$text" }
 function Fail([string]$text) { Write-Output "[desk] $text"; exit 1 }
+# Any unexpected error: one readable line (the installer shows the last lines),
+# not PowerShell's multi-line error record.
+trap { Write-Output "[desk] 出错：$($_.Exception.Message)（第 $($_.InvocationInfo.ScriptLineNumber) 行）"; exit 1 }
 
 $TaskName = 'NightshiftHub'
 
@@ -183,7 +186,10 @@ Say "4/6 计划任务 $TaskName"
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
   -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcher`"" -WorkingDirectory $AppDir
 $trigger = New-ScheduledTaskTrigger -AtStartup
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Highest
+# The account from the Windows identity, not $env:USERDOMAIN\$env:USERNAME:
+# over SSH those can name a domain the account does not map to (0x80070534).
+$account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType S4U -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
   -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null

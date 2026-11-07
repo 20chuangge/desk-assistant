@@ -141,7 +141,8 @@ function connectSsh({ host, port, username, password }) {
       port,
       username,
       password,
-      readyTimeout: 25000,
+      // Windows OpenSSH on a fresh VM can take 15-20 s to finish the handshake.
+      readyTimeout: 45000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 3,
     });

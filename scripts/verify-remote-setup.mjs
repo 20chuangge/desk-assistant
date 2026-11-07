@@ -58,7 +58,7 @@ function connect() {
       port: Number(DESK_SSH_PORT),
       username: DESK_TARGET_USER,
       password: DESK_TARGET_PASS,
-      readyTimeout: 20000,
+      readyTimeout: 45000,
     });
   });
 }
