@@ -36,6 +36,8 @@ let tray = null;
 let child = null;
 let quitting = false;
 let serverPort = 0;
+/** When the local server died recently (restart budget: 3 a minute). */
+const crashTimes = [];
 /** The machine the window shows: '' is this computer, otherwise a hub URL. */
 let remoteHub = '';
 /** A task a bot handed to another machine: delivered once that machine loads. */
@@ -219,7 +221,46 @@ async function prepareHome() {
 const HUB_MODE = process.argv.includes('--hub');
 const HUB_HOST = '0.0.0.0';
 
-function startServer({ host = '127.0.0.1', portAttempt = 'fixed' } = {}) {
+/*
+ * The local server's port is part of the window's identity: localStorage (the
+ * machine list, layout prefs) is keyed by origin, so a random port per launch
+ * would be a new profile every time. But a fixed port is not always free:
+ * Windows with Hyper-V/WSL reserves random port ranges at every boot (it once
+ * took 4296-4395, and with it 4390). So: a short list of well-spread
+ * candidates, and the one that worked is remembered and tried first.
+ */
+const PORT_FILE = path.join(app.getPath('userData'), 'port.json');
+const PORT_CANDIDATES = [4390, 14390, 24390, 34390, 44390, 54390];
+
+function savedPort() {
+  try { return Number(JSON.parse(fs.readFileSync(PORT_FILE, 'utf8')).port) || 0; } catch { return 0; }
+}
+
+/** Start the local server on the first port that binds. */
+async function startServer({ host = '127.0.0.1' } = {}) {
+  if (host === HUB_HOST || process.env.PORT) return launchServer({ host, port: process.env.PORT || '0' });
+  const tried = [...new Set([savedPort(), ...PORT_CANDIDATES].filter(Boolean))];
+  let lastError = null;
+  for (const port of tried) {
+    try {
+      const bound = await launchServer({ host, port: String(port) });
+      if (bound !== savedPort()) {
+        try { fs.writeFileSync(PORT_FILE, `${JSON.stringify({ port: bound })}\n`); } catch { /* read-only profile */ }
+      }
+      return bound;
+    } catch (err) {
+      lastError = err;
+      bootLog(`port ${port} unavailable: ${err.message}`);
+    }
+  }
+  // Every candidate is reserved: take any free port rather than not start.
+  bootLog(`all pinned ports unavailable (${lastError?.message}); using a free port`);
+  return launchServer({ host, port: '0' });
+}
+
+/** One server process. Resolves with its port once it is listening; rejects
+ *  if it exits first. A crash later restarts it on the same port. */
+function launchServer({ host, port }) {
   const entry = path.join(SERVER_DIR, 'src', 'server.mjs');
   if (!fs.existsSync(entry)) throw new Error(`server entry missing: ${entry}`);
 
@@ -229,26 +270,28 @@ function startServer({ host = '127.0.0.1', portAttempt = 'fixed' } = {}) {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       ASSIST_HOME: HOME,
-      // Fixed by default: localStorage (machine list, layout prefs) is keyed by
-      // origin, and a random port made every restart a brand-new profile.
-      PORT: process.env.PORT || (host === HUB_HOST || portAttempt === 'auto' ? '0' : '4390'),
+      PORT: port,
       HOST: host,
       ...(host === HUB_HOST ? { ASSIST_ALLOW_REMOTE: '1' } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  const proc = child;
+  let ready = false;
+  let stderrTail = '';
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('server did not become ready in 20s')), 20000);
 
-    readline.createInterface({ input: child.stdout }).on('line', (line) => {
+    readline.createInterface({ input: proc.stdout }).on('line', (line) => {
       // the server prints exactly one machine-readable ready line
       if (line.startsWith('{')) {
         try {
           const msg = JSON.parse(line);
           if (msg.event === 'ready' && msg.port) {
             clearTimeout(timer);
+            ready = true;
             serverPort = msg.port;
             resolve(msg.port);
           }
@@ -256,31 +299,40 @@ function startServer({ host = '127.0.0.1', portAttempt = 'fixed' } = {}) {
       }
     });
 
-    child.stderr.on('data', (buf) => {
+    proc.stderr.on('data', (buf) => {
       const text = buf.toString().trim();
-      if (text) console.error('[server]', text);
+      if (!text) return;
+      console.error('[server]', text);
+      stderrTail = `${stderrTail}\n${text}`.slice(-1500);
     });
 
-    child.on('exit', (code, signal) => {
+    proc.on('exit', (code, signal) => {
       if (quitting) return;
-      // Pinned port busy? Retry once on an ephemeral port.
-      if (portAttempt === 'fixed' && code !== 0) {
-        console.warn('[desk] pinned port unavailable; retrying on a free port');
-        portAttempt = 'auto';
-        startServer({ host, portAttempt: 'auto' }).then(resolve).catch(reject);
+      if (!ready) {
+        clearTimeout(timer);
+        reject(new Error(stderrTail.split('\n').filter(Boolean).pop() || `exit ${code ?? signal}`));
         return;
       }
-      console.error(`[server] exited code=${code} signal=${signal}`);
+      // It was running and died: keep the app alive and bring the server back
+      // on the same port (the window reconnects by itself). Give up only if it
+      // keeps dying.
+      bootLog(`server exited code=${code ?? signal} after start:${stderrTail.slice(-600)}`);
+      crashTimes.push(Date.now());
+      while (crashTimes.length && Date.now() - crashTimes[0] > 60_000) crashTimes.shift();
+      if (crashTimes.length <= 3) {
+        launchServer({ host, port: String(serverPort) }).catch((err) => bootLog(`restart failed: ${err.message}`));
+        return;
+      }
       if (win && !win.isDestroyed()) {
         dialog.showErrorBox(
           L('夜班的后台进程退出了', 'The Nightshift server stopped'),
-          L(`退出码 ${code ?? signal}。重新打开夜班即可恢复；数据在：\n${HOME}`, `Exit code ${code ?? signal}. Reopen Nightshift to recover; your data is in:\n${HOME}`),
+          L(`一分钟内连续退出了好几次（退出码 ${code ?? signal}）。重新打开夜班即可恢复；详情见 ${BOOT_LOG}`, `It stopped several times in a minute (exit code ${code ?? signal}). Reopen Nightshift to recover; details in ${BOOT_LOG}`),
         );
       }
       app.quit();
     });
 
-    child.on('error', reject);
+    proc.on('error', reject);
   });
 }
 

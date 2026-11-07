@@ -135,7 +135,10 @@ function connectSsh({ host, port, username, password }) {
       }
     };
     client.once('ready', () => finish(null));
-    client.once('error', (err) => finish(err));
+    // `on`, not `once`: Windows OpenSSH resets the socket after refusing a
+    // login, so a second 'error' follows the first. With no listener left,
+    // Node treats it as unhandled and the whole server process dies.
+    client.on('error', (err) => finish(err));
     client.connect({
       host,
       port,
