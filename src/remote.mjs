@@ -43,6 +43,9 @@ const SETUP_SCRIPTS = {
 // and may be sharing its package lock with the OS's own updates: give it an hour.
 const JOB_TIMEOUT_MS = 60 * 60 * 1000;
 
+/** Setup scripts tag their lines "[desk]"; the human only needs the words. */
+const cleanLine = (text) => String(text).replace(/^\s*\[desk\]\s*/, '').replace(/^警告：/, '⚠ ');
+
 function remoteError(code, message) {
   const err = new Error(message);
   err.code = code;
@@ -331,7 +334,7 @@ export function createProvisioner({ modelToShare = () => null, voiceToShare = ()
       {
         onLine: (line) => {
           const text = line.trim();
-          if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+          if (text && !/^DESK_/.test(text)) setProgress(job, cleanLine(text).slice(0, 300));
         },
       },
     );
@@ -386,7 +389,7 @@ export function createProvisioner({ modelToShare = () => null, voiceToShare = ()
               stdin: isRoot ? '' : `${password}\n`,
               onLine: (line) => {
                 const text = line.trim();
-                if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+                if (text && !/^DESK_/.test(text)) setProgress(job, cleanLine(text).slice(0, 300));
               },
             },
           );
@@ -400,7 +403,7 @@ export function createProvisioner({ modelToShare = () => null, voiceToShare = ()
         // The script checks its own work; trust its verdict over "exit 0".
         if (result.code !== 0 || value('DESK_HUB_OK') !== '1' || !job.pairCode) {
           const said = result.output.trim().split(/\r?\n/).filter((line) => line.trim() && !/^DESK_/.test(line));
-          const tail = said.slice(-4).join(' / ') || `exit ${result.code}`;
+          const tail = said.slice(-4).map(cleanLine).join(' / ') || `exit ${result.code}`;
           throw remoteError('REMOTE_HUB_FAILED', `安装失败：${tail}`);
         }
         // "na": Windows has no per-bot desktops yet; its bots browse headless.

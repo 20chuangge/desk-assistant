@@ -41,6 +41,15 @@ done
 
 [ "$(id -u)" -eq 0 ] || { echo "[desk] 需要 root：sudo bash $0" >&2; exit 1; }
 
+# If the client that started us goes away (it gave up waiting, the laptop
+# slept), the setup must still finish: ignore the hangup, and send all output
+# through `tee -p`, which keeps writing the log after the SSH pipe is gone
+# instead of killing us on the next line we print.
+trap '' HUP PIPE
+SETUP_LOG=/var/log/desk-setup.log
+: > "$SETUP_LOG" 2>/dev/null || SETUP_LOG=/tmp/desk-setup.log
+exec > >(tee -p -a "$SETUP_LOG") 2>&1
+
 say()  { printf '\n[desk] %s\n' "$*"; }
 warn() { printf '[desk] 警告：%s\n' "$*" >&2; }
 
@@ -82,7 +91,9 @@ say "$OS_NAME（$PM），程序目录 $APP_DIR，运行账号 $RUN_USER"
 
 # A fresh Ubuntu runs its own automatic updates right after boot: wait for
 # their lock (up to 10 min) instead of failing the package.
-APT_WAIT="-o DPkg::Lock::Timeout=600"
+# A stalled mirror connection (seen behind proxies) must not hang forever:
+# give up on 30 s of silence and retry.
+APT_WAIT="-o DPkg::Lock::Timeout=600 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3"
 pm_refresh() {
   case "$PM" in
     apt) DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT update -qq >/dev/null 2>&1 || true ;;
