@@ -2728,6 +2728,13 @@ async function scenarioMachinesAndPolicy({ approvals, toolsMod }) {
     ws.onmessage = (e) => got.push(Buffer.from(e.data));
     await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('ws error')); });
     await sleep(200);
+    {
+      // noVNC resolves "path" against /novnc/vnc.html, so it must be absolute.
+      const { viewerUrl } = await import('../src/desktops.mjs');
+      const page = new URL(viewerUrl('chief'), 'http://hub:4390');
+      const target = new URL(page.searchParams.get('path'), page);
+      check('viewer: the WebSocket path resolves to the hub relay, not under /novnc/', target.pathname === '/api/bots/chief/desktop/ws', target.pathname);
+    }
     check('ws bridge: the VNC banner reaches the viewer', Buffer.concat(got).toString() === 'RFB 003.008\n' && ws.protocol === 'binary');
     got.length = 0;
     const big = Buffer.alloc(70_000, 3); // > 64 KB: the 8-byte length form

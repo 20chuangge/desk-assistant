@@ -72,9 +72,11 @@ function windowsDesktop(botId) {
   };
 }
 
-/** Same-origin noVNC page, connecting back through the hub's relay. */
-function viewerUrl(botId) {
-  return `/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=${encodeURIComponent(`api/bots/${encodeURIComponent(botId)}/desktop/ws`)}`;
+/** Same-origin noVNC page, connecting back through the hub's relay. The path
+ *  must start with "/": noVNC resolves it against the page, and a relative one
+ *  would land under /novnc/. */
+export function viewerUrl(botId) {
+  return `/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=${encodeURIComponent(`/api/bots/${encodeURIComponent(botId)}/desktop/ws`)}`;
 }
 
 /** Whether per-bot desktops can work on this machine at all. */
