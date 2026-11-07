@@ -39,7 +39,9 @@ const SETUP_SCRIPTS = {
   linux: path.join(HERE, '..', 'hub', 'setup-linux.sh'),
   windows: path.join(HERE, '..', 'hub', 'setup-windows.ps1'),
 };
-const JOB_TIMEOUT_MS = 20 * 60 * 1000;
+// A freshly restored machine downloads everything (Node, a desktop, a browser)
+// and may be sharing its package lock with the OS's own updates: give it an hour.
+const JOB_TIMEOUT_MS = 60 * 60 * 1000;
 
 function remoteError(code, message) {
   const err = new Error(message);
@@ -184,7 +186,7 @@ function execStream(client, command, { stdin = '', onLine = () => {}, timeoutMs 
     const timer = setTimeout(() => {
       if (done) return;
       done = true;
-      reject(remoteError('REMOTE_TIMEOUT', 'the remote command took too long'));
+      reject(remoteError('REMOTE_TIMEOUT', `那台机器上的安装超过 ${Math.round(timeoutMs / 60000)} 分钟还没结束（多半是下载太慢）。它可能还在后台继续装：过几分钟再点一次「连接并自动配置」，会等它装完再接着做。`));
     }, timeoutMs);
 
     client.exec(command, (err, stream) => {

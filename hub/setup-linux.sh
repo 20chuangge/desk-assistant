@@ -43,6 +43,16 @@ done
 
 say()  { printf '\n[desk] %s\n' "$*"; }
 warn() { printf '[desk] 警告：%s\n' "$*" >&2; }
+
+# A second run (the human pressed retry while the first is still going) waits
+# for the first instead of fighting it for the package lock and the files.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/var/lock/desk-setup.lock
+  if ! flock -n 9; then
+    say "上一次安装还在进行，等它结束…"
+    flock -w 3600 9 || { echo "[desk] 等了一小时，上一次安装还没结束" >&2; exit 1; }
+  fi
+fi
 has()  { command -v "$1" >/dev/null 2>&1; }
 
 RUN_USER="${SUDO_USER:-root}"
@@ -70,15 +80,18 @@ OS_NAME="$( (. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}") || true)"
 OS_NAME="${OS_NAME:-$(uname -sr)}"
 say "$OS_NAME（$PM），程序目录 $APP_DIR，运行账号 $RUN_USER"
 
+# A fresh Ubuntu runs its own automatic updates right after boot: wait for
+# their lock (up to 10 min) instead of failing the package.
+APT_WAIT="-o DPkg::Lock::Timeout=600"
 pm_refresh() {
   case "$PM" in
-    apt) DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true ;;
+    apt) DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT update -qq >/dev/null 2>&1 || true ;;
     *)   "$PM" -y -q makecache >/dev/null 2>&1 || true ;;
   esac
 }
 pm_one() {
   case "$PM" in
-    apt) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$1" >/dev/null 2>&1 ;;
+    apt) DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq "$1" >/dev/null 2>&1 ;;
     *)   "$PM" install -y -q "$1" >/dev/null 2>&1 ;;
   esac
 }
@@ -88,6 +101,9 @@ pm_one() {
 pm_install() {
   local pkg
   for pkg in "$@"; do
+    # One line per package: the human sees it moving, and a long install is
+    # never mistaken for a hang.
+    printf '[desk]   安装 %s…\n' "$pkg"
     pm_one "$pkg" && continue
     pm_refresh
     pm_one "$pkg" || warn "没装上 $pkg"

@@ -7617,7 +7617,7 @@ async function startRemoteProvision(options) {
   // packages) and step 5 on Windows (TightVNC) are the long ones. The bar and
   // the estimate move every second between polls, so it never looks frozen.
   const STEP_SECONDS = {
-    linux: [5, 45, 240, 10, 10, 15, 10],
+    linux: [5, 60, 600, 10, 10, 15, 10],
     windows: [5, 60, 20, 10, 90, 10, 30],
   };
   const t0 = Date.now();
