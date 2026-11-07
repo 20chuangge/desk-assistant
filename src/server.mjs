@@ -227,7 +227,7 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
       theme: null,
       timezoneMode: null,
       timezone: '',
-      target: null,
+      machine: null,
       panelOpen: false,
       tab: 'activity',
       updatedAt: null,
@@ -268,20 +268,20 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
   const UI_TZ_MODES = new Set(['local', 'target', 'manual']);
   const UI_TABS = new Set(['activity', 'computer', 'skills', 'routines', 'memory']);
 
-  function cleanUiPatch(patch = {}, { keepSecrets = false } = {}) {
+  function cleanUiPatch(patch = {}) {
     const clean = {};
     if (UI_THEMES.has(patch.theme)) clean.theme = patch.theme;
     if (UI_TZ_MODES.has(patch.timezoneMode)) clean.timezoneMode = patch.timezoneMode;
     if (typeof patch.timezone === 'string') clean.timezone = patch.timezone.slice(0, 64);
     if (typeof patch.panelOpen === 'boolean') clean.panelOpen = patch.panelOpen;
     if (UI_TABS.has(patch.tab)) clean.tab = patch.tab;
-    if (patch.target && typeof patch.target === 'object') {
-      const target = {};
-      const keys = keepSecrets ? ['id', 'name', 'host', 'port', 'password', 'timezone'] : ['id', 'name', 'host', 'port', 'timezone'];
-      for (const key of keys) {
-        if (patch.target[key] !== undefined) target[key] = patch.target[key];
-      }
-      clean.target = target;
+    // Which machine the window is showing; reported by the UI, read by ui_get.
+    if (patch.machine && typeof patch.machine === 'object') {
+      clean.machine = {
+        name: String(patch.machine.name || '').slice(0, 80),
+        url: String(patch.machine.url || '').slice(0, 200),
+        local: Boolean(patch.machine.local),
+      };
     }
     return clean;
   }
@@ -293,10 +293,8 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     return state.uiView();
   };
   state.applyUi = (patch = {}, meta = {}) => {
-    const clean = cleanUiPatch(patch);
-    // A machine password travels to the browser once, in the event, and is
-    // never stored in uiState nor returned by ui_get.
-    const eventPatch = cleanUiPatch(patch, { keepSecrets: true });
+    const { machine, ...clean } = cleanUiPatch(patch); // the machine is reported, never commanded
+    const eventPatch = clean;
     if (!Object.keys(eventPatch).length) return state.uiView();
     if (Object.keys(clean).length) {
       state.uiState = { ...state.uiState, ...clean, updatedAt: nowIso() };

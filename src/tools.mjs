@@ -1302,7 +1302,7 @@ export function createRegistry(deps) {
   add({
     name: 'ui_set',
     description:
-      'Change what the human sees, live in every open window. theme is dark/light/system. timezoneMode is local/target/manual; with manual also pass timezone (IANA). target {name, host, port, password?, timezone?} adds or selects a controlled machine. panelOpen/tab control the side panel (activity|computer|skills|routines|memory).',
+      'Change what the human sees, live in every open window. theme is dark/light/system. timezoneMode is local (this device) / target (the machine the bots run on) / manual; with manual also pass timezone (IANA). panelOpen/tab control the side panel (activity|computer|skills|routines|memory).',
     risk: RISK.LOW,
     parameters: {
       type: 'object',
@@ -1310,18 +1310,6 @@ export function createRegistry(deps) {
         theme: { type: 'string', enum: ['dark', 'light', 'system'] },
         timezoneMode: { type: 'string', enum: ['local', 'target', 'manual'] },
         timezone: { type: 'string', description: 'IANA zone, used when timezoneMode is manual.' },
-        target: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            host: { type: 'string' },
-            port: { type: 'number' },
-            password: { type: 'string' },
-            timezone: { type: 'string' },
-          },
-          required: ['host'],
-          additionalProperties: false,
-        },
         panelOpen: { type: 'boolean' },
         tab: { type: 'string', enum: ['activity', 'computer', 'skills', 'routines', 'memory'] },
       },
@@ -1330,7 +1318,7 @@ export function createRegistry(deps) {
     async run(args, ctx) {
       if (!ctx.app?.applyUi) throw toolError('APP_UNAVAILABLE', 'UI state is not available in this runtime');
       const patch = {};
-      for (const key of ['theme', 'timezoneMode', 'timezone', 'target', 'panelOpen', 'tab']) {
+      for (const key of ['theme', 'timezoneMode', 'timezone', 'panelOpen', 'tab']) {
         if (args?.[key] !== undefined) patch[key] = args[key];
       }
       if (!Object.keys(patch).length) throw toolError('UI_PATCH_EMPTY', 'pass at least one UI setting');

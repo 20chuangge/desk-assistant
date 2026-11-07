@@ -11,9 +11,7 @@ directories:
 # shell starts it with a separate Node process.
 files:
   - main.mjs
-  - preload.mjs
   - shell-preload.cjs
-  - connect.html
   - package.json
   - build/icon.png
   - "!**/*.map"

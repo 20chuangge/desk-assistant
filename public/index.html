@@ -752,50 +752,11 @@
   /* author display rules below would otherwise beat the UA [hidden] style */
   #pane-computer [hidden] { display: none !important; }
 
-  /* pick which machine the takeover button talks to */
-  .pc-target-bar {
-    display: flex; align-items: center; gap: 6px; margin: 0 0 4px;
-  }
-  .pc-target-label {
-    flex: none; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--dim); font-weight: 700;
-  }
-  .pc-target-select { flex: 1; min-width: 0; font-size: 12px; min-height: 32px; padding: 5px 28px 5px 9px; }
-  select.field.pc-target-select { background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px; }
-  .pc-target-foot {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    margin: 0 0 var(--s3); min-height: 14px;
-  }
-  .pc-target-hint { color: var(--dim); font-size: 11px; }
-
   /* The panel is a screen viewer, not a dashboard: host stats, process list and
      the redundant hint line stay out of the way. */
   #pc-stats,
   #pc-procs,
-  #pc-procs-head,
-  #pc-target-hint,
-  #pc-local-note { display: none !important; }
-  .pc-link {
-    border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer;
-    padding: 0; text-decoration: underline; text-underline-offset: 2px;
-  }
-  .pc-link:hover { color: var(--text); }
-
-  /* remote machines have no screenshot endpoint: show a card instead */
-  .pc-remote {
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 30px 18px 26px; text-align: center;
-  }
-  .pc-remote[hidden] { display: none; }
-  .pc-remote-icon {
-    width: 34px; height: 34px; fill: none; stroke: var(--dim); stroke-width: 1.5;
-    stroke-linecap: round; stroke-linejoin: round; margin-bottom: 2px;
-  }
-  .pc-remote-name { font-size: 13px; font-weight: 650; color: var(--text); }
-  .pc-remote-addr { font-size: 11px; color: var(--dim); }
-  .pc-remote-note { max-width: 230px; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
-  .pc-remote .btn { margin-top: 4px; }
-  .pc-screen.takeover .pc-remote { display: none !important; }
+  #pc-procs-head { display: none !important; }
 
   /* "working…" row */
   .typing-row {
@@ -1705,6 +1666,35 @@
     padding: 14px 10px 8px 14px; flex: none;
   }
   .side-brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  /* the machine switcher: the brand row IS the current machine */
+  .machine-switch {
+    position: relative; padding: 4px 6px; margin: -4px -6px; border-radius: 9px;
+    border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer;
+  }
+  .machine-switch:hover, .machine-switch[aria-expanded="true"] { background: var(--panel-2); }
+  .machine-caret { flex: none; color: var(--dim); font-size: 10px; margin-left: auto; }
+  .machine-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #34d399; margin-right: 5px; vertical-align: 1px; }
+  #machine-menu { left: 10px; right: 10px; top: 54px; min-width: 0; }
+  #machine-menu .mm-item { display: flex; align-items: center; gap: 8px; }
+  #machine-menu .mm-item b { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  #machine-menu .mm-item small { color: var(--dim); font-size: 11px; }
+  #machine-menu .mm-item.current b::after { content: '  ✓'; color: var(--dim); font-weight: 400; }
+  .machine-list { display: flex; flex-direction: column; gap: 6px; }
+  .machine-row {
+    display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+    border: 1px solid var(--border-soft); border-radius: 10px;
+  }
+  .machine-row.current { border-color: var(--border-strong); }
+  .machine-avatar {
+    flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 700;
+  }
+  .machine-meta { flex: 1; min-width: 0; }
+  .machine-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .machine-sub { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .machine-tag { font-size: 11px; color: var(--dim); }
+  .machine-actions { display: flex; gap: 4px; flex: none; }
+  .machine-empty { font-size: 12px; color: var(--dim); padding: 6px 2px; }
   .brand-mark {
     width: 24px; height: 24px; border-radius: 7px;
     background: linear-gradient(145deg, #ffffff, #9d9da6);
@@ -2252,13 +2242,15 @@
       <div class="edge-resizer sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" title="拖动调整宽窄，双击恢复默认"></div>
 
       <div class="side-top">
-        <div class="side-brand">
+        <button class="side-brand machine-switch" id="machine-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="切换机器">
           <div class="brand-mark" aria-hidden="true"></div>
           <div class="side-brand-text">
-            <b id="assistant-name">Desk</b>
-            <small id="assistant-persona-short">每个助手都有自己的电脑</small>
+            <b id="machine-name">本机</b>
+            <small id="machine-sub"><i class="machine-dot"></i>这台电脑</small>
           </div>
-        </div>
+          <span class="machine-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="menu" id="machine-menu" role="menu" hidden></div>
         <div class="new-bot">
           <button class="round-btn" id="new-bot-btn" type="button" aria-label="新建助手或群组" title="新建" aria-haspopup="menu" aria-expanded="false">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -2392,21 +2384,8 @@
         </div>
 
         <div class="pane" id="pane-computer" role="tabpanel">
-          <div class="pc-target-bar">
-            <span class="pc-target-label">Bot 运行在</span>
-            <span class="pc-target-hint" id="bot-host-hint">本机</span>
-            <button class="btn tiny" id="bot-host-switch" type="button" hidden>切换机器</button>
-          </div>
-          <div class="pc-target-bar" style="margin-top:6px">
-            <span class="pc-target-label">看谁的屏幕</span>
-            <select class="field pc-target-select" id="pc-target" aria-label="选择要接管的机器"></select>
-          </div>
-          <div class="pc-target-foot">
-            <span class="pc-target-hint" id="pc-target-hint">本机：Desk 运行在这台电脑上</span>
-            <button class="pc-link" id="pc-target-edit" type="button" hidden>编辑当前机器</button>
-          </div>
           <div class="section-head">
-            <span>那台机器</span>
+            <span id="pc-title">屏幕</span>
             <span class="pc-actions">
               <button class="btn tiny" id="pc-max" type="button">全屏</button>
               <button class="btn tiny" id="pc-desktop" type="button">接管桌面</button>
@@ -2416,16 +2395,6 @@
           <div class="pc-screen" id="pc-screen-wrap">
             <img id="pc-screen" alt="Hub 屏幕" />
             <div class="pc-screen-note" id="pc-screen-note">还没有截屏</div>
-            <div class="pc-remote" id="pc-remote" hidden>
-              <svg class="pc-remote-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="12" rx="2"></rect>
-                <path d="M8 20h8M12 16v4"></path>
-              </svg>
-              <div class="pc-remote-name" id="pc-remote-name">—</div>
-              <div class="pc-remote-addr mono" id="pc-remote-addr">—</div>
-              <div class="pc-remote-note">这是一台远程机器。接管后可以直接操作它的鼠标和键盘。</div>
-              <button class="btn primary tiny" id="pc-remote-connect" type="button">连接这台机器</button>
-            </div>
             <div class="pc-vnc-layer" id="pc-vnc-wrap" hidden></div>
             <div class="pc-vnc-shield" id="pc-vnc-shield" hidden>
               <div class="pc-preview-badge"><i></i><span id="pc-preview-name">实时画面</span></div>
@@ -2436,7 +2405,6 @@
           <div class="pc-stats" id="pc-stats"></div>
           <div class="section-head" id="pc-procs-head" style="margin-top:14px"><span>进程</span></div>
           <div id="pc-procs"></div>
-          <div class="row-note" id="pc-local-note" hidden>远程接管只传画面。这台电脑的 CPU 和进程信息已隐藏，切回「这台电脑」可以查看。</div>
         </div>
 
         <div class="pane" id="pane-skills" role="tabpanel">
@@ -2556,12 +2524,11 @@
       <section class="dsec" id="sec-machines">
         <div class="dsec-head">机器</div>
         <div class="dsec-hint">
-          一台机器就是一个独立的 Desk：它有自己的 Bot、记忆和工作区。切换机器后整窗重载，互不混淆。
+          每台机器有自己的一套 Bot、记忆、工作区和桌面。选中哪台，整个界面就是哪台；左上角也能切换。
         </div>
         <div class="machine-list" id="set-machines-list"></div>
         <div class="row-actions" style="margin-top:10px">
           <button class="btn primary tiny" id="set-add-machine" type="button">添加机器</button>
-          <button class="btn tiny" id="set-switch-machine" type="button">切换机器…</button>
         </div>
       </section>
 
@@ -2575,10 +2542,10 @@
         <div class="row-note">切换立即生效，只记在这台设备上。</div>
 
         <div class="dsec-head" style="margin-top:20px">时区</div>
-        <p class="dsec-sub">定时任务、时间和日志都按这个时区理解。接管远程机器时，可以让它跟着那台机器走。</p>
+        <p class="dsec-sub">定时任务、时间和日志都按这个时区理解。用远程机器时，可以让它跟着那台机器走。</p>
         <div class="seg" id="tz-mode-seg" role="radiogroup" aria-label="时区来源">
           <button class="seg-btn" type="button" data-tz-mode="local" role="radio" aria-checked="false">跟随这台设备</button>
-          <button class="seg-btn" type="button" data-tz-mode="target" role="radio" aria-checked="false">跟随接管机器</button>
+          <button class="seg-btn" type="button" data-tz-mode="target" role="radio" aria-checked="false">跟随当前机器</button>
           <button class="seg-btn" type="button" data-tz-mode="manual" role="radio" aria-checked="false">手动选择</button>
         </div>
         <select class="field select" id="tz-select" hidden aria-label="选择时区"></select>
@@ -2609,7 +2576,7 @@
         <div class="kv"><span class="k">应用</span><span class="v" id="about-app">Desk</span></div>
         <div class="kv"><span class="k">版本</span><span class="v" id="about-version">—</span></div>
         <div class="kv"><span class="k">服务</span><span class="v" id="about-server">—</span></div>
-        <div class="kv"><span class="k">接管地址</span><span class="v" id="about-origin">—</span></div>
+        <div class="kv"><span class="k">机器地址</span><span class="v" id="about-origin">—</span></div>
         <div class="kv"><span class="k">时区</span><span class="v" id="timezone-pill">—</span></div>
         <div class="kv"><span class="k">访问控制</span><span class="v" id="about-auth">—</span></div>
       </section>
@@ -2645,12 +2612,12 @@
 </div>
 
 <!-- =====================================================================
-     add / edit a machine to take over
+     add a machine: SSH in, install a hub, pair, remember it
      ===================================================================== -->
 <div class="scrim" id="vnc-scrim" aria-hidden="true"></div>
 <div class="modal" id="vnc-modal" role="dialog" aria-modal="true" aria-labelledby="vnc-modal-title" aria-hidden="true">
   <div class="modal-head">
-    <span class="modal-title" id="vnc-modal-title">连接一台机器</span>
+    <span class="modal-title" id="vnc-modal-title">添加机器</span>
     <button class="icon-btn sm" id="vnc-modal-close" type="button" aria-label="关闭">✕</button>
   </div>
   <div class="modal-body">
@@ -2671,13 +2638,10 @@
 
     <div class="row-note">
       填完点「连接并自动配置」就行，剩下的都自动：
-      装依赖 → 部署 Desk Hub → 配好远程桌面 → 回来给你地址和配对码。
+      装依赖 → 部署 Desk → 配好每个 Bot 的桌面 → 自动配对并加进机器列表。
       密码只用于这一次配置，不会保存。
     </div>
 
-    <!-- kept for compatibility with the stored machine records -->
-    <input type="hidden" id="vnc-pass" value="desk1234" />
-    <input type="hidden" id="vnc-tz" value="" />
     <div class="prov-progress" id="vnc-progress-wrap" hidden>
       <div class="prov-bar"><i id="vnc-progress-bar"></i></div>
       <div class="prov-step" id="vnc-progress-step">准备中…</div>
@@ -2686,9 +2650,8 @@
     <div class="modal-note" id="vnc-modal-note" hidden></div>
   </div>
   <div class="modal-foot">
-    <button class="btn danger" id="vnc-delete" type="button" hidden>删除</button>
     <button class="btn" id="vnc-cancel" type="button">取消</button>
-    <button class="btn primary" id="vnc-save" type="button">保存</button>
+    <button class="btn primary" id="vnc-save" type="button">连接并自动配置</button>
   </div>
 </div>
 
@@ -2942,10 +2905,7 @@ function timezonePref() {
 function effectiveTimezone() {
   const pref = timezonePref();
   if (pref.mode === 'manual') return pref.value || localTimezone();
-  if (pref.mode === 'target') {
-    const target = activeTarget();
-    if (target.id !== 'local' && target.timezone) return target.timezone;
-  }
+  if (pref.mode === 'target' && state.computer?.host?.timezone) return state.computer.host.timezone;
   return localTimezone();
 }
 
@@ -2990,13 +2950,10 @@ function syncTimezoneUi() {
   }
   if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(zone);
   if ($('tz-note')) {
-    const target = activeTarget();
-    if (pref.mode === 'target' && target.id !== 'local' && !target.timezone) {
-      $('tz-note').textContent = `还认不出「${target.name}」的时区，先按这台设备的 ${localTimezone()} 走；可以点「编辑当前机器」手动填。`;
-    } else if (pref.mode === 'target' && target.id !== 'local') {
-      $('tz-note').textContent = `跟着「${target.name}」走：${zone}`;
+    if (pref.mode === 'target' && !state.computer?.host?.timezone) {
+      $('tz-note').textContent = `还读不到「${machineDisplayName()}」的时区，先按这台设备的 ${localTimezone()} 走。`;
     } else if (pref.mode === 'target') {
-      $('tz-note').textContent = `现在接管的是本机，使用这台设备的 ${zone}。`;
+      $('tz-note').textContent = `跟着「${machineDisplayName()}」走：${zone}`;
     } else {
       $('tz-note').textContent = `当前时区：${zone}`;
     }
@@ -3035,32 +2992,7 @@ function setTimezoneMode(mode) {
   pref.mode = mode;
   if (mode === 'manual' && !pref.value) pref.value = effectiveTimezone();
   try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
-  if (mode === 'target') probeActiveTargetTimezone();
   applyTimezone({ push: true });
-}
-
-/** A remote Desk Hub can tell us its timezone without any agent on the box. */
-async function probeActiveTargetTimezone() {
-  const target = activeTarget();
-  if (target.id === 'local' || target.timezone || target.probing) return;
-  const targets = readTargets();
-  const row = targets.find((t) => t.id === target.id);
-  if (!row) return;
-  row.probing = true;
-  writeTargets(targets);
-  try {
-    const info = await api(`/api/remote/info?host=${encodeURIComponent(target.host)}`);
-    if (info && info.timezone) {
-      const next = readTargets().map((t) => (t.id === target.id ? { ...t, timezone: info.timezone, probing: false } : t));
-      writeTargets(next);
-      if (timezonePref().mode === 'target') applyTimezone({ push: true });
-      renderTargetPicker();
-      return;
-    }
-  } catch { /* older hub / auth / unreachable */ }
-  const next = readTargets().map((t) => (t.id === target.id ? { ...t, probing: false } : t));
-  writeTargets(next);
-  if (timezonePref().mode === 'target') syncTimezoneUi();
 }
 
 function initTimezone() {
@@ -3933,7 +3865,7 @@ function setBotEditNote(text) {
 function closeMenus() {
   document.querySelectorAll('.menu').forEach((m) => { m.hidden = true; });
   document.querySelectorAll('[aria-expanded="true"]').forEach((n) => {
-    if (n.id === 'new-bot-btn' || n.classList.contains('bot-more')) n.setAttribute('aria-expanded', 'false');
+    if (n.id === 'new-bot-btn' || n.id === 'machine-btn' || n.classList.contains('bot-more')) n.setAttribute('aria-expanded', 'false');
   });
 }
 
@@ -4161,9 +4093,9 @@ async function connectDevice() {
 async function boot() {
   initTheme();
   wireChrome();
-  ensureTargets();
   initTimezone();
-  renderTargetPicker();
+  renderComputerPane();
+  refreshMachines();
   applyLayoutPrefs();
   startScreenLoop();
   registerServiceWorker();
@@ -4237,7 +4169,6 @@ function showFatal(err) {
 
 function applyShellConfig() {
   const cfg = state.config || {};
-  $('assistant-name').textContent = cfg.name || 'Desk';
   if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
   updateModelUi();
 }
@@ -4280,7 +4211,7 @@ function updateModelUi() {
   $('about-version').textContent = app.version || (state.config && state.config.version) || '—';
   const server = st.server || {};
   $('about-server').textContent = `${server.host || location.hostname}${server.port ? ':' + server.port : (location.port ? ':' + location.port : '')}`;
-  syncTargetBranding();
+  syncMachineBranding();
   const authRequired = state.auth ? Boolean(state.auth.required) : Boolean(server.requireAuth);
   $('about-auth').textContent = authRequired ? '需要配对（本机除外）' : '仅本机，无需配对';
 }
@@ -5143,7 +5074,6 @@ function reportUiState() {
   clearTimeout(uiReportTimer);
   uiReportTimer = setTimeout(() => {
     if (!state.ready) return;
-    const target = activeTarget();
     const pref = timezonePref();
     api('/api/ui/state', {
       method: 'POST',
@@ -5152,12 +5082,10 @@ function reportUiState() {
           theme: themePref(),
           timezoneMode: pref.mode,
           timezone: effectiveTimezone(),
-          target: {
-            id: target.id,
-            name: target.name,
-            host: target.host,
-            port: target.port,
-            timezone: target.timezone || '',
+          machine: {
+            name: machineDisplayName(),
+            url: location.origin,
+            local: onLocalMachine(),
           },
           panelOpen: Boolean(state.panelOpen),
           tab: state.tab || 'chat',
@@ -5184,37 +5112,6 @@ function applyUiCommand(patch = {}) {
     }
     try { localStorage.setItem(TZ_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
     applyTimezone({ push: true });
-    touched = true;
-  }
-
-  if (patch.target && patch.target.host) {
-    const targets = readTargets();
-    const wantedPort = Number(patch.target.port) || 6080;
-    let row = patch.target.id
-      ? targets.find((t) => t.id === patch.target.id)
-      : targets.find((t) => t.host === patch.target.host && Number(t.port || 6080) === wantedPort);
-    if (!row) {
-      row = {
-        id: `machine-${Date.now().toString(36)}`,
-        name: patch.target.name || patch.target.host,
-        host: patch.target.host,
-        port: wantedPort,
-        password: patch.target.password || '',
-        timezone: patch.target.timezone || '',
-      };
-      targets.push(row);
-    } else {
-      row.name = patch.target.name || row.name;
-      row.host = patch.target.host;
-      row.port = wantedPort;
-      if (patch.target.password !== undefined) row.password = patch.target.password;
-      if (patch.target.timezone !== undefined) row.timezone = patch.target.timezone;
-    }
-    writeTargets(targets);
-    try { localStorage.setItem(VNC_ACTIVE_KEY, row.id); } catch { /* ignore */ }
-    if (document.body.classList.contains('panel-max')) togglePanelMax(false);
-    if (desktopTakeover()) closeDesktopViewer();
-    renderTargetPicker();
     touched = true;
   }
 
@@ -6486,12 +6383,11 @@ function switchTab(name) {
   if (name === 'computer') {
     loadComputer();
     refreshScreen();
-    syncViewer(activeTarget());
+    syncViewer();
   } else if (!desktopTakeover()) {
     // Only the computer pane needs a live VNC socket; stop it when the human
     // switches away, unless they are actively controlling the machine.
     unmountViewer();
-    applyTargetMode();
   }
   reportUiState();
 }
@@ -6535,7 +6431,7 @@ async function loadComputer() {
       // only when the human presses 接管桌面.
       const card = $('pc-screen-wrap');
       if (card) card.classList.remove('takeover');
-      syncViewer(activeTarget());
+      syncViewer();
     }
     if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
     return;
@@ -6571,20 +6467,16 @@ async function refreshScreen() {
   const img = $('pc-screen');
   const note = $('pc-screen-note');
   if (!img) return;
-  if (activeTarget().id !== 'local') return; // remote targets have no screenshot API
   try {
     const res = await fetch(`/api/computer/screenshot?ts=${Date.now()}`, { credentials: 'same-origin' });
-    if (activeTarget().id !== 'local') return; // user switched while the request was in flight
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      if (activeTarget().id !== 'local') return;
       img.style.display = 'none';
       note.textContent = body?.error?.message || '这台机器没有可截的屏幕（无桌面会话）';
       note.style.display = 'block';
       return;
     }
     const blob = await res.blob();
-    if (activeTarget().id !== 'local') return;
     if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
     const url = URL.createObjectURL(blob);
     img.dataset.url = url;
@@ -6592,7 +6484,6 @@ async function refreshScreen() {
     img.style.display = 'block';
     note.style.display = 'none';
   } catch (err) {
-    if (activeTarget().id !== 'local') return;
     note.textContent = `截屏失败：${err.message}`;
     note.style.display = 'block';
   }
@@ -6609,9 +6500,8 @@ function fillAccountMenu() {
   // mirror it into the bottom-left chip in the sidebar
   if ($('side-account-name')) $('side-account-name').textContent = appName;
   if ($('side-avatar')) $('side-avatar').textContent = initial;
-  // Both chips name the machine being controlled, not where the UI happens
-  // to be served from.
-  syncTargetBranding();
+  // Both chips name the machine this window is showing.
+  syncMachineBranding();
 }
 
 /* ---------------------------------------------------------------------
@@ -6678,248 +6568,200 @@ function wireChromeResizers() {
 }
 
 /* ---------------------------------------------------------------------
-   take-over targets
-   "本机" is the machine Desk itself runs on. Anything else in the list is a
-   noVNC viewer on the LAN, remembered on this device only (localStorage).
+   machines
+   A machine is one Desk server with its own bots, memory, workspace and
+   screens. The window shows exactly one machine; the desktop shell
+   (window.desk) switches by pointing the window at another server. In a plain
+   browser or on a phone there is no list: you are on the machine you opened.
    --------------------------------------------------------------------- */
-const VNC_TARGETS_KEY = 'desk.vncTargets';
-const VNC_ACTIVE_KEY = 'desk.vncTargetId';
-// No machine is baked in: addresses and passwords are per-install state, not
-// something that belongs in a public source tree. The panel starts on "本机"
-// and the human adds their own machines from "+ 机器".
-const VNC_SEED_TARGETS = [];
-let editingTargetId = null;
 let viewerUrl = '';
+/** {current, local, machines:[{url,name}]} from the desktop shell, or null. */
+let machineBridge = null;
 
-function readTargets() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(VNC_TARGETS_KEY) || 'null');
-    if (Array.isArray(raw)) {
-      const clean = raw.filter((t) => t && typeof t.id === 'string' && typeof t.host === 'string' && t.host);
-      return dedupeTargets(clean);
-    }
-  } catch { /* corrupted; fall through to the seed */ }
-  return VNC_SEED_TARGETS.map((t) => ({ ...t }));
+function onLocalMachine() {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(location.origin);
 }
 
-function dedupeTargets(list) {
-  const byHost = new Map();
-  for (const t of list) {
-    const key = String(t.host || '').trim().toLowerCase();
-    if (!key) continue;
-    const prev = byHost.get(key);
-    // keep the newest entry (last write wins), but never lose a name
-    byHost.set(key, prev ? { ...prev, ...t, name: t.name || prev.name } : t);
+function machineDisplayName() {
+  if (onLocalMachine()) return '本机';
+  const row = machineBridge?.machines?.find((m) => m.url === location.origin);
+  return row?.name || state.computer?.host?.hostname || location.hostname;
+}
+
+/** Everything that names "where am I": switcher, account chip, About. */
+function syncMachineBranding() {
+  const local = onLocalMachine();
+  const name = machineDisplayName();
+  const host = state.computer?.host;
+  const os = host ? (host.platform === 'win32' ? 'Windows' : host.platform === 'linux' ? 'Linux' : host.platform) : '';
+  if ($('machine-name')) $('machine-name').textContent = name;
+  if ($('machine-sub')) {
+    $('machine-sub').innerHTML = `<i class="machine-dot"></i>${escapeHtml(local ? '这台电脑' : [os, location.hostname].filter(Boolean).join(' · '))}`;
   }
-  return [...byHost.values()];
-}
-
-function writeTargets(list) {
-  try { localStorage.setItem(VNC_TARGETS_KEY, JSON.stringify(dedupeTargets(list))); } catch { /* private mode */ }
-}
-
-/** First run: start on "本机" with an empty list; machines are added by hand. */
-function ensureTargets() {
-  try {
-    if (localStorage.getItem(VNC_TARGETS_KEY) !== null) return;
-    writeTargets([]);
-  } catch { /* private mode: targets stay in memory */ }
-}
-
-function activeTarget() {
-  let id = 'local';
-  try { id = localStorage.getItem(VNC_ACTIVE_KEY) || 'local'; } catch { /* ignore */ }
-  if (id === 'local') return { id: 'local', name: '这台电脑', local: true };
-  return readTargets().find((t) => t.id === id) || { id: 'local', name: '这台电脑', local: true };
-}
-
-function targetLabel(t) {
-  return `${t.host}:${t.port || 6080}`;
-}
-
-/** The account chip and the About block speak for the machine being controlled. */
-function syncTargetBranding() {
-  const target = activeTarget();
-  const remote = target.id !== 'local';
-  const onHub = !/^(https?:\/\/)?(127\.0\.0\.1|localhost|\[\]|\[::1\])(:|\/|$)/.test(location.origin);
-  const sub = onHub
-    ? `远程 Hub · ${state.computer?.host?.hostname || location.hostname}`
-    : '本机模式';
+  const sub = local ? '本机' : `远程 · ${name}`;
   if ($('side-account-sub')) $('side-account-sub').textContent = sub;
-  // Same sentence as the sidebar: the popover must not claim "local" while the
-  // panel is talking to a hub.
   if ($('am-sub')) $('am-sub').textContent = sub;
-  if ($('about-origin')) {
-    $('about-origin').textContent = remote
-      ? `${target.protocol === 'https:' ? 'https' : 'http'}://${targetLabel(target)}`
-      : location.origin;
-    $('about-origin').title = remote ? `正在接管：${target.name}` : 'Desk 运行在这台电脑上';
-  }
+  if ($('about-origin')) $('about-origin').textContent = location.origin;
   if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
+  if ($('composer-hint')) {
+    $('composer-hint').textContent = local
+      ? '需要动你电脑的操作，会先问过你'
+      : `在「${name}」上，助手会自己把事情做完`;
+  }
 }
 
-/** Accept "1.2.3.4", "1.2.3.4:6080" or a full noVNC URL. */
+async function refreshMachines() {
+  try { machineBridge = (await window.desk?.listMachines?.()) || null; } catch { machineBridge = null; }
+  syncMachineBranding();
+  renderMachineMenu();
+  if ($('settings-drawer')?.classList.contains('open')) renderMachinesList();
+  return machineBridge;
+}
+
+async function switchMachine(url) {
+  closeMenus();
+  if (!window.desk) return;
+  const res = url ? await window.desk.switchHub(url) : await window.desk.useLocal();
+  if (!res?.ok) toast(res?.error || '切换失败', true);
+}
+
+/** Sidebar dropdown: every machine, plus "添加机器". */
+function renderMachineMenu() {
+  const menu = $('machine-menu');
+  if (!menu) return;
+  if (!machineBridge) {
+    menu.innerHTML = '<button type="button" disabled>在 Desk 客户端里才能切换机器</button>';
+    return;
+  }
+  const rows = [{ url: '', name: '本机', sub: '这台电脑', current: machineBridge.local }]
+    .concat((machineBridge.machines || []).map((m) => ({
+      url: m.url, name: m.name, sub: m.url.replace(/^https?:\/\//, ''), current: m.url === machineBridge.current,
+    })));
+  menu.innerHTML = rows.map((m) => `
+    <button type="button" role="menuitem" class="mm-item ${m.current ? 'current' : ''}" data-machine="${escapeHtml(m.url)}">
+      <b>${escapeHtml(m.name)}</b><small>${escapeHtml(m.sub)}</small>
+    </button>`).join('')
+    + '<div class="menu-sep"></div><button type="button" role="menuitem" data-machine-add="1">添加机器…</button>';
+}
+
+/** Settings → 机器: one row each, switch / rename / remove. */
+function renderMachinesList() {
+  const box = $('set-machines-list');
+  if (!box) return;
+  if (!machineBridge) {
+    box.innerHTML = `<div class="machine-empty">当前：${escapeHtml(machineDisplayName())}。在浏览器或手机里打开时只能用当前这台；添加和切换机器请在 Desk 客户端里操作。</div>`;
+    return;
+  }
+  const row = (m) => `
+    <div class="machine-row ${m.current ? 'current' : ''}">
+      <div class="machine-avatar">${escapeHtml((m.name || '?').slice(0, 1).toUpperCase())}</div>
+      <div class="machine-meta">
+        <div class="machine-name">${escapeHtml(m.name)}</div>
+        <div class="machine-sub">${escapeHtml(m.sub)}</div>
+      </div>
+      <div class="machine-actions">
+        ${m.current ? '<span class="machine-tag">当前</span>' : `<button class="btn tiny" data-switch="${escapeHtml(m.url)}">切到这里</button>`}
+        ${m.url ? `<button class="btn tiny" data-rename="${escapeHtml(m.url)}">改名</button><button class="btn tiny" data-remove="${escapeHtml(m.url)}">移除</button>` : ''}
+      </div>
+    </div>`;
+  const rows = [row({ url: '', name: '本机', sub: 'Bot 和浏览器都在这台电脑上', current: machineBridge.local })];
+  for (const m of machineBridge.machines || []) {
+    rows.push(row({ url: m.url, name: m.name, sub: m.url, current: m.url === machineBridge.current }));
+  }
+  if (!(machineBridge.machines || []).length) {
+    rows.push('<div class="machine-empty">还没有别的机器。点「添加机器」，填 SSH 信息就能自动装好一台。</div>');
+  }
+  box.innerHTML = rows.join('');
+}
+
+async function onMachineListClick(event) {
+  const btn = event.target.closest('[data-switch],[data-rename],[data-remove]');
+  if (!btn || !window.desk) return;
+  if (btn.dataset.switch !== undefined) {
+    btn.disabled = true;
+    btn.textContent = '切换中…';
+    await switchMachine(btn.dataset.switch);
+    btn.disabled = false;
+    btn.textContent = '切到这里';
+    return;
+  }
+  if (btn.dataset.rename) {
+    const current = machineBridge?.machines?.find((m) => m.url === btn.dataset.rename)?.name || '';
+    const name = window.prompt('这台机器叫什么？', current);
+    if (!name || !name.trim()) return;
+    const res = await window.desk.renameMachine(btn.dataset.rename, name.trim());
+    if (!res?.ok) toast(res?.error || '改名失败', true);
+    await refreshMachines();
+    return;
+  }
+  if (btn.dataset.remove) {
+    const ok = await askConfirm({
+      title: '移除这台机器？',
+      text: '只是从列表里拿掉，那台机器上的 Bot 和数据不会删除；以后可以重新添加。',
+      confirmLabel: '移除',
+    });
+    if (!ok) return;
+    await window.desk.removeMachine(btn.dataset.remove);
+    await refreshMachines();
+  }
+}
+
+/** Accept "1.2.3.4", "1.2.3.4:22" or a URL; only the host matters here. */
 function parseTargetAddress(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
   let u;
   try { u = new URL(/^https?:\/\//i.test(text) ? text : `http://${text}`); }
   catch { return null; }
-  if (!u.hostname) return null;
-  const protocol = u.protocol === 'https:' ? 'https:' : 'http:';
-  const port = Number(u.port || (protocol === 'https:' ? 443 : 6080));
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  const path = u.pathname && u.pathname !== '/' ? u.pathname : '/vnc.html';
-  return { protocol, host: u.hostname, port, path };
+  return u.hostname ? { host: u.hostname } : null;
 }
 
 /**
- * Load the bundled noVNC page from this install, then connect it to the target
- * machine's websockify. Keeping the page same-origin lets us hide its control
- * bar, overlay a "take over" shield, and scale the remote cursor correctly.
+ * The live view: the hub hands out the current bot's own desktop URL; without
+ * one (older hub, no per-bot desktops) fall back to the machine's shared noVNC.
  */
-function viewerUrlFor({ host, port = 6080, password = '', encrypted = false }) {
+function currentViewerUrl() {
+  if (state.computer?.desktop?.url) return state.computer.desktop.url;
+  const host = onLocalMachine() ? '127.0.0.1' : location.hostname;
   const url = new URL('/novnc/vnc.html', location.origin);
-  url.searchParams.set('autoconnect', '1');
-  url.searchParams.set('resize', 'scale');
-  url.searchParams.set('reconnect', '1');
-  url.searchParams.set('reconnect_delay', '2000');
-  url.searchParams.set('host', host);
-  url.searchParams.set('port', String(port));
-  url.searchParams.set('path', 'websockify');
-  if (encrypted) url.searchParams.set('encrypt', '1');
-  if (password) url.searchParams.set('password', password);
+  for (const [k, v] of Object.entries({ autoconnect: '1', resize: 'scale', reconnect: '1', reconnect_delay: '2000', host, port: '6080', path: 'websockify' })) {
+    url.searchParams.set(k, v);
+  }
   return url.toString();
 }
 
-function targetViewerUrl(t) {
-  if (t.id === 'local') {
-    // The hub tells us which screen "this machine" means RIGHT NOW: a bot's own
-    // display (:120 -> port 6100, no password) or the shared one (6080). Hard
-    // coding 6080 here was why the panel showed the machine's login screen.
-    const url = state.computer?.desktop?.url;
-    if (url) return url;
-    const host = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? '127.0.0.1' : location.hostname;
-    return viewerUrlFor({ host, port: 6080, password: '' });
-  }
-  return viewerUrlFor({
-    host: t.host,
-    port: t.port || 6080,
-    password: t.password || '',
-    encrypted: t.protocol === 'https:',
-  });
-}
-
-/* Where the BOTS live is a different question from whose screen you are
-   watching. Saying both out loud prevents the "本机模式 but I see Ubuntu"
-   confusion: the panel can show a remote screen while the bots run here. */
-function renderBotHost() {
-  const hint = $('bot-host-hint');
-  if (!hint) return;
-  const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(location.origin);
-  if (local) {
-    hint.textContent = '本机（Bot 和浏览器都在这台电脑上）';
-  } else {
-    hint.textContent = `远程 Hub · ${location.hostname}`;
-  }
-  const btn = $('bot-host-switch');
-  if (btn) {
-    const canPick = typeof window.desk?.pickMachine === 'function';
-    btn.hidden = !canPick;
-    if (canPick && !btn.dataset.wired) {
-      btn.dataset.wired = '1';
-      btn.addEventListener('click', () => window.desk.pickMachine());
-    }
-  }
-}
-
-/** What "this machine" means right now: the hub's box, or the laptop itself. */
-function localScreenLabel() {
-  const hostname = state.computer?.host?.hostname || '';
-  const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(location.origin);
-  if (local) return '这台电脑（本机）';
-  return hostname ? `这台 Hub 的机器（${hostname}）` : '这台 Hub 的机器';
-}
-
-function renderTargetPicker() {
-  renderBotHost();
-  const select = $('pc-target');
-  if (!select) return;
-  const active = activeTarget();
-  select.innerHTML = [
-    `<option value="local">${escapeHtml(localScreenLabel())}</option>`,
-    ...readTargets().map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.host)}</option>`),
-  ].join('');
-  select.value = active.id;
-  if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
-  applyTargetMode(active);
-  syncViewer(active);
-}
-
-/** Swap the screenshot card for the live remote view, or back. */
-function applyTargetMode(target = activeTarget()) {
-  const remote = target.id !== 'local';
-  const card = $('pc-remote');
-  const wrap = $('pc-vnc-wrap');
-  if (card) card.hidden = !remote || desktopTakeover() || Boolean(wrap && !wrap.hidden);
-  if (remote) {
-    if ($('pc-remote-name')) $('pc-remote-name').textContent = target.name || target.host;
-    if ($('pc-remote-addr')) $('pc-remote-addr').textContent = targetLabel(target);
-    if ($('pc-screen')) $('pc-screen').style.display = 'none';
-    if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
-  } else if (!desktopTakeover()) {
+function renderComputerPane() {
+  syncMachineBranding();
+  if ($('pc-title')) $('pc-title').textContent = `${machineDisplayName()} 的屏幕`;
+  if (!desktopTakeover()) {
     if ($('pc-screen')) $('pc-screen').style.display = '';
     refreshScreen();
   }
-  for (const id of ['pc-stats', 'pc-procs', 'pc-procs-head', 'pc-local-note']) {
-    const node = $(id);
-    if (node) node.hidden = id === 'pc-local-note' ? !remote : remote;
-  }
-  if ($('pc-target-hint')) {
-    $('pc-target-hint').textContent = remote
-      ? `远程：${target.name || target.host} · ${desktopTakeover() ? '正在控制' : '实时画面'}`
-      : '本机：Desk 运行在这台电脑上';
-  }
-  if ($('pc-target-edit')) $('pc-target-edit').hidden = !remote;
-  syncTargetBranding();
-  syncViewer(target);
-  if (timezonePref().mode === 'target') {
-    syncTimezoneUi();
-    probeActiveTargetTimezone();
-  }
+  syncViewer();
 }
 
 /**
- * The viewer iframe stays mounted while the target is remote: a live picture
+ * The viewer iframe stays mounted while the pane is open: a live picture
  * before takeover, keyboard/mouse control after. No reconnect when toggling.
  */
-function syncViewer(target = activeTarget()) {
+function syncViewer() {
   const wrap = $('pc-vnc-wrap');
   const shield = $('pc-vnc-shield');
   if (!wrap) return;
-  const remote = target.id !== 'local';
   const takeover = desktopTakeover();
-
-  if (!remote && !takeover && !state.computer?.desktop?.url) {
+  const watching = state.panelOpen && state.tab === 'computer';
+  if (!takeover && (!state.computer?.desktop?.url || !watching)) {
     unmountViewer();
     if (shield) shield.hidden = true;
     return;
   }
-  if (remote && !takeover && !(state.panelOpen && state.tab === 'computer')) {
-    // Nothing is looking at the panel: do not keep a VNC session open.
-    unmountViewer();
-    if (shield) shield.hidden = true;
-    if ($('pc-remote')) $('pc-remote').hidden = false;
-    return;
-  }
 
-  const url = targetViewerUrl(target);
-  if (!url) return;
+  const url = currentViewerUrl();
   if (viewerUrl !== url || !wrap.querySelector('iframe')) {
     wrap.innerHTML = '';
     const frame = document.createElement('iframe');
     frame.src = url;
-    frame.setAttribute('title', `${target.name || '远程'}桌面`);
+    frame.setAttribute('title', `${machineDisplayName()}桌面`);
     frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
     frame.setAttribute('allowfullscreen', '');
     frame.referrerPolicy = 'no-referrer';
@@ -6929,7 +6771,6 @@ function syncViewer(target = activeTarget()) {
   wrap.hidden = false;
   if ($('pc-screen')) $('pc-screen').style.display = 'none';
   if ($('pc-screen-note')) $('pc-screen-note').style.display = 'none';
-  if ($('pc-remote')) $('pc-remote').hidden = true;
   const card = $('pc-screen-wrap');
   if (card) {
     card.classList.add('viewer');
@@ -6938,9 +6779,7 @@ function syncViewer(target = activeTarget()) {
   }
   if (shield) {
     shield.hidden = takeover;
-    if (!takeover) {
-      if ($('pc-preview-name')) $('pc-preview-name').textContent = `实时画面 · ${target.name || target.host}`;
-    }
+    if (!takeover && $('pc-preview-name')) $('pc-preview-name').textContent = `实时画面 · ${machineDisplayName()}`;
   }
   if ($('pc-desktop')) $('pc-desktop').textContent = takeover ? '返回预览' : '接管桌面';
 }
@@ -6958,14 +6797,6 @@ function unmountViewer() {
   if ($('pc-vnc-shield')) $('pc-vnc-shield').hidden = true;
 }
 
-function selectTakeoverTarget(id) {
-  try { localStorage.setItem(VNC_ACTIVE_KEY, id); } catch { /* ignore */ }
-  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
-  if (desktopTakeover()) closeDesktopViewer();
-  renderTargetPicker();
-  reportUiState();
-}
-
 function fillZoneSelect(select, current) {
   if (!select) return;
   const zones = new Set(COMMON_TIMEZONES);
@@ -6977,86 +6808,15 @@ function fillZoneSelect(select, current) {
   select.value = current || '';
 }
 
-/** The machine list: one row each, current one marked, click to switch. */
-async function renderMachinesList() {
-  const box = $('set-machines-list');
-  if (!box) return;
-  const onHub = !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(location.origin);
-  const host = state.computer?.host?.hostname || location.hostname;
-
-  let bridge = null;
-  try { bridge = await window.desk?.listMachines?.(); } catch { /* browser: no bridge */ }
-
-  if (!bridge) {
-    box.innerHTML = `<div class="machine-empty">当前：${escapeHtml(onHub ? `远程 Hub · ${host}` : '本机（这台电脑）')}（浏览器里无法列机器，请在 Desk 客户端里管理）</div>`;
-    return;
-  }
-
-  const rows = [];
-  rows.push(`
-    <div class="machine-row ${bridge.local ? 'current' : ''}">
-      <div class="machine-avatar">D</div>
-      <div class="machine-meta">
-        <div class="machine-name">本机（这台电脑）</div>
-        <div class="machine-sub">Bot 和浏览器都在这台电脑上</div>
-      </div>
-      ${bridge.local ? '<span class="machine-tag">当前</span>' : '<button class="btn tiny" data-switch-local="1">切到这里</button>'}
-    </div>`);
-
-  for (const machine of bridge.machines || []) {
-    const isCurrent = bridge.current && machine.url === bridge.current;
-    rows.push(`
-      <div class="machine-row ${isCurrent ? 'current' : ''}">
-        <div class="machine-avatar">${escapeHtml((machine.name || '?').slice(0, 1).toUpperCase())}</div>
-        <div class="machine-meta">
-          <div class="machine-name">${escapeHtml(machine.name || machine.url)}</div>
-          <div class="machine-sub">${escapeHtml(machine.url)}</div>
-        </div>
-        ${isCurrent ? '<span class="machine-tag">当前</span>' : `<button class="btn tiny" data-switch-url="${escapeHtml(machine.url)}">切到这里</button>`}
-      </div>`);
-  }
-  if (!(bridge.machines || []).length && bridge.local) {
-    rows.push('<div class="machine-empty">还没有添加过别的机器。点下面的「添加机器」，填 SSH 信息就能自动装一台。</div>');
-  }
-  box.innerHTML = rows.join('');
-
-  box.querySelectorAll('[data-switch-url]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const url = btn.getAttribute('data-switch-url');
-      btn.disabled = true;
-      btn.textContent = '切换中…';
-      const res = await window.desk.switchHub(url);
-      if (!res?.ok) {
-        btn.disabled = false;
-        btn.textContent = '切换失败，重试';
-        if (res?.error) toast?.(res.error);
-      }
-    });
-  });
-  box.querySelectorAll('[data-switch-local]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.textContent = '切换中…';
-      await window.desk.useLocal();
-    });
-  });
-}
-
-function openTargetModal(target) {
-  editingTargetId = target?.id || null;
-  $('vnc-modal-title').textContent = editingTargetId ? '编辑机器' : '连接一台机器';
-  $('vnc-name').value = target?.name || '';
-  $('vnc-addr').value = target?.host || '';
-  $('vnc-pass').value = target?.password || 'desk1234';
-  // Five fields, everything else is automatic: a blank machine needs nothing
-  // more than where it is and how to log in.
-  $('vnc-ssh-user').value = target?.sshUser || 'ubuntu';
-  $('vnc-ssh-port').value = String(target?.sshPort || 22);
+function openMachineModal() {
+  $('vnc-name').value = '';
+  $('vnc-addr').value = '';
+  $('vnc-ssh-user').value = 'ubuntu';
+  $('vnc-ssh-port').value = '22';
   $('vnc-ssh-pass').value = '';
-  $('vnc-save').textContent = editingTargetId ? '保存并重新配置' : '连接并自动配置';
   $('vnc-progress').hidden = true;
   $('vnc-progress').className = 'modal-note';
-  $('vnc-delete').hidden = !editingTargetId;
+  if ($('vnc-progress-wrap')) $('vnc-progress-wrap').hidden = true;
   $('vnc-modal-note').hidden = true;
   $('vnc-modal').classList.add('open');
   $('vnc-modal').setAttribute('aria-hidden', 'false');
@@ -7064,64 +6824,37 @@ function openTargetModal(target) {
   setTimeout(() => $('vnc-addr').focus(), 50);
 }
 
-function closeTargetModal() {
+function closeMachineModal() {
   $('vnc-modal').classList.remove('open');
   $('vnc-modal').setAttribute('aria-hidden', 'true');
   $('vnc-scrim').classList.remove('show');
-  editingTargetId = null;
 }
 
-function saveTargetFromModal() {
-  const name = $('vnc-name').value.trim();
-  const hostInput = $('vnc-addr').value.trim();
+function saveMachineFromModal() {
   const note = $('vnc-modal-note');
-  if (!hostInput) {
-    note.textContent = '先填那台机器的 IP，例如 192.168.1.20';
-    note.hidden = false;
-    return;
-  }
+  const fail = (text) => { note.textContent = text; note.hidden = false; };
+  const hostInput = $('vnc-addr').value.trim();
+  if (!hostInput) return fail('先填那台机器的 IP，例如 192.168.1.20');
   const address = parseTargetAddress(hostInput);
-  if (!address) {
-    note.textContent = 'IP 地址看起来不对，例子：192.168.1.20';
-    note.hidden = false;
-    return;
-  }
-  const sshUser = $('vnc-ssh-user').value.trim() || 'ubuntu';
-  const sshPort = Number($('vnc-ssh-port').value) || 22;
-  const sshPass = $('vnc-ssh-pass').value;
-  if (!sshPass) {
-    note.textContent = '还需要那台机器的 SSH 密码，才能自动配置。';
-    note.hidden = false;
-    return;
-  }
-  const targetName = name || address.host;
-  const provision = { host: address.host, sshPort, username: sshUser, password: sshPass, vncPassword: 'desk1234' };
-  const targets = readTargets();
-  let activeId = editingTargetId;
-  if (editingTargetId) {
-    const index = targets.findIndex((t) => t.id === editingTargetId);
-    if (index >= 0) {
-      targets[index] = { ...targets[index], ...address, name: targetName, sshUser, sshPort };
-    }
-  } else {
-    const id = `machine-${Date.now().toString(36)}`;
-    activeId = id;
-    targets.push({ id, name: targetName, ...address, password: 'desk1234', sshUser, sshPort, timezone: '' });
-    try { localStorage.setItem(VNC_ACTIVE_KEY, id); } catch { /* ignore */ }
-  }
-  writeTargets(targets);
-  renderTargetPicker();
-  // Always provision: a new machine is blank, an edited one may have been
-  // reinstalled. The SSH password lives only inside this job.
-  startRemoteProvision(activeId, provision);
+  if (!address) return fail('IP 地址看起来不对，例子：192.168.1.20');
+  const password = $('vnc-ssh-pass').value;
+  if (!password) return fail('还需要那台机器的 SSH 密码，才能自动配置。');
+  note.hidden = true;
+  startRemoteProvision({
+    name: $('vnc-name').value.trim() || address.host,
+    host: address.host,
+    sshPort: Number($('vnc-ssh-port').value) || 22,
+    username: $('vnc-ssh-user').value.trim() || 'ubuntu',
+    password,
+  });
 }
 
 /**
- * Run the target-side setup and show its progress in the machine dialog.
- * The SSH password is sent once, lives in this job only, and is never stored
- * in localStorage or the target list.
+ * Install a hub on the target and show progress in the dialog. The SSH
+ * password lives in this job only. When it finishes the desktop shell pairs
+ * with the new hub and adds it to the machine list.
  */
-async function startRemoteProvision(targetId, options) {
+async function startRemoteProvision(options) {
   const progress = $('vnc-progress');
   const save = $('vnc-save');
   const barWrap = $('vnc-progress-wrap');
@@ -7147,13 +6880,10 @@ async function startRemoteProvision(targetId, options) {
     progress.className = `modal-note${kind ? ` ${kind}` : ''}`;
     progress.textContent = text;
   };
-  show('正在连接被控机器…');
+  show('正在连接那台机器…');
   if (save) save.disabled = true;
   try {
-    const started = await api('/api/remote/provision', {
-      method: 'POST',
-      body: { targetId, ...options },
-    });
+    const started = await api('/api/remote/provision', { method: 'POST', body: options });
     const jobId = started?.job?.id;
     if (!jobId) throw new Error('服务没有返回配置任务');
     let job = started.job;
@@ -7165,74 +6895,45 @@ async function startRemoteProvision(targetId, options) {
       show(job.message || '正在配置…');
       setBar(job);
       quietTicks = job.message === before ? quietTicks + 1 : 0;
-      // Long apt installs can be silent for minutes; keep the human oriented.
+      // Long package installs can be silent for minutes; keep the human oriented.
       if (quietTicks === 80) show('安装还在进行，软件包较大时需要几分钟…');
     }
     if (job.state === 'error') throw new Error(job.message || '远程配置失败');
+    if (!job.hubUrl) throw new Error('配置结束了，但没有拿到那台机器的地址');
 
-    if (job.timezone) {
-      const next = readTargets().map((t) => (
-        t.id === targetId ? { ...t, timezone: job.timezone } : t
-      ));
-      writeTargets(next);
-      if (timezonePref().mode === 'target') applyTimezone({ push: true });
-    }
     if (bar) bar.style.width = '100%';
     if (barStep) barStep.textContent = '完成';
-    show(job.message || '远程桌面已就绪。', job.state === 'warning' ? '' : 'ok');
-    // The machine now runs its own Hub: make "use it" one click instead of
-    // leaving the human to find the address and retype it in the picker.
-    if (job.hubUrl) {
-      const note = $('vnc-modal-note');
-      if (note) {
-        note.hidden = false;
-        note.innerHTML = `<div style="margin-bottom:6px">Hub 已就绪：<b>${escapeHtml(job.hubUrl)}</b>`
-          + (job.pairCode ? ` · 配对码 <b>${escapeHtml(job.pairCode)}</b>` : '')
-          + '</div>';
-        if (typeof window.desk?.switchHub === 'function') {
-          const btn = document.createElement('button');
-          btn.className = 'btn primary tiny';
-          btn.type = 'button';
-          btn.textContent = '切换到这台机器';
-          btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            btn.textContent = '正在切换…';
-            const res = await window.desk.switchHub(job.hubUrl);
-            if (!res?.ok) { btn.disabled = false; btn.textContent = '切换失败，重试'; }
-          });
-          note.appendChild(btn);
-        }
-      }
+    let paired = false;
+    if (window.desk?.addMachine) {
+      const added = await window.desk.addMachine({ url: job.hubUrl, name: options.name, pairCode: job.pairCode });
+      paired = Boolean(added?.paired);
+      await refreshMachines();
     }
-    // The preview iframe was mounted before the target had a VNC server; drop
-    // it so the next render opens a fresh connection instead of showing the
-    // failed page forever.
-    const wrap = $('pc-vnc-wrap');
-    if (wrap) wrap.innerHTML = '';
-    viewerUrl = '';
-    renderTargetPicker();
-    reportUiState();
-    toast(job.state === 'warning' ? '配置完成，但端口还没就绪' : '远程机器已经可以使用了', job.state === 'warning');
-    setTimeout(() => {
-      if ($('vnc-modal')?.classList.contains('open')) closeTargetModal();
-    }, job.state === 'warning' ? 4000 : 1200);
+    show(job.state === 'warning' ? (job.message || '装好了，但有一项没完全就绪') : `「${options.name}」已经装好${paired ? '并配对' : ''}。`, job.state === 'warning' ? '' : 'ok');
+    const note = $('vnc-modal-note');
+    note.hidden = false;
+    note.innerHTML = `<div style="margin-bottom:6px">地址：<b>${escapeHtml(job.hubUrl)}</b>`
+      + (job.pairCode && !paired ? ` · 配对码 <b>${escapeHtml(job.pairCode)}</b>` : '')
+      + '</div>';
+    if (window.desk?.switchHub) {
+      const btn = document.createElement('button');
+      btn.className = 'btn primary tiny';
+      btn.type = 'button';
+      btn.textContent = '切换到这台机器';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = '正在切换…';
+        await switchMachine(job.hubUrl);
+        btn.disabled = false;
+        btn.textContent = '切换到这台机器';
+      });
+      note.appendChild(btn);
+    }
   } catch (err) {
     show(`自动配置失败：${err.message}`, 'bad');
   } finally {
     if (save) save.disabled = false;
   }
-}
-
-function deleteTargetFromModal() {
-  if (!editingTargetId) return;
-  const targets = readTargets().filter((t) => t.id !== editingTargetId);
-  writeTargets(targets);
-  try { localStorage.setItem(VNC_ACTIVE_KEY, 'local'); } catch { /* ignore */ }
-  if (document.body.classList.contains('panel-max')) togglePanelMax(false);
-  if (desktopTakeover()) closeDesktopViewer();
-  closeTargetModal();
-  renderTargetPicker();
-  toast('已删除', false);
 }
 
 /** Fill the whole window with the single desktop card. */
@@ -7245,42 +6946,30 @@ async function togglePanelMax(on) {
     switchTab('computer');
   }
   $('pc-max').textContent = next ? '退出全屏' : '全屏';
-  syncViewer(activeTarget());
+  syncViewer();
 }
 
 function desktopTakeover() {
   return $('pc-screen-wrap')?.classList.contains('takeover');
 }
 
-/** Start controlling the desktop. For a remote target this only unlocks the
- *  already-running live view, so there is no reconnect and no black frame. */
+/** Start controlling the desktop. With a live preview mounted this only
+ *  lifts the shield, so there is no reconnect and no black frame. */
 async function openDesktopViewer() {
-  const target = activeTarget();
-  if (target.id === 'local' && !state.computer?.desktop?.url) {
+  if (!state.computer?.desktop?.url) {
     try { await loadComputer(); } catch { /* the viewer can still ask for a password */ }
   }
   const card = $('pc-screen-wrap');
   if (card) card.classList.add('takeover');
-  syncViewer(target);
-  if ($('pc-remote')) $('pc-remote').hidden = true;
-  if ($('pc-desktop')) $('pc-desktop').textContent = '返回预览';
-  if ($('pc-target-hint') && target.id !== 'local') {
-    $('pc-target-hint').textContent = `远程：${target.name || target.host} · 正在控制`;
-  }
+  syncViewer();
 }
 
-/** Stop controlling. A remote machine keeps its live picture; the local
- *  machine drops the session entirely and returns to the screenshot. */
 function closeDesktopViewer() {
   const card = $('pc-screen-wrap');
   if (card) card.classList.remove('takeover');
-  if (activeTarget().id === 'local') {
-    unmountViewer();
-  } else {
-    syncViewer(activeTarget());
-  }
+  unmountViewer();
   if ($('pc-desktop')) $('pc-desktop').textContent = '接管桌面';
-  applyTargetMode();
+  renderComputerPane();
 }
 
 function stopScreenLoop() {  if (screenTimer) { clearInterval(screenTimer); screenTimer = null; }
@@ -7501,15 +7190,13 @@ function wireChrome() {
   $('am-settings').addEventListener('click', () => { $('account-menu').hidden = true; openSettings(); });
   $('am-pair').addEventListener('click', () => { $('account-menu').hidden = true; openSettings('sec-pair'); });
   $('pc-refresh').addEventListener('click', () => {
-    if (activeTarget().id !== 'local') {
-      const wrap = $('pc-vnc-wrap');
-      if (wrap) wrap.innerHTML = '';
+    if ($('pc-vnc-wrap')?.querySelector('iframe')) {
+      $('pc-vnc-wrap').innerHTML = '';
       viewerUrl = '';
-      syncViewer(activeTarget());
-      return;
     }
     loadComputer();
     refreshScreen();
+    syncViewer();
   });
   $('pc-desktop').addEventListener('click', () => {
     if (desktopTakeover()) closeDesktopViewer();
@@ -7518,32 +7205,37 @@ function wireChrome() {
   $('pc-preview-take').addEventListener('click', () => openDesktopViewer());
   $('pc-max').addEventListener('click', () => togglePanelMax());
   $('pc-exit').addEventListener('click', () => togglePanelMax(false));
-  $('pc-target').addEventListener('change', (event) => selectTakeoverTarget(event.target.value));
-  $('pc-target-add')?.addEventListener('click', () => openTargetModal(null));
-  // Settings → 机器: the only place a machine is added or switched now.
-  $('set-add-machine')?.addEventListener('click', () => { closeSettings(); openTargetModal(null); });
-  $('set-switch-machine')?.addEventListener('click', () => window.desk?.pickMachine?.());
-  $('pc-target-edit').addEventListener('click', () => {
-    const target = activeTarget();
-    if (target.id !== 'local') openTargetModal(target);
+  // machines: sidebar switcher + Settings → 机器
+  $('machine-btn').addEventListener('click', (event) => {
+    event.stopPropagation();
+    renderMachineMenu();
+    toggleMenu($('machine-menu'), $('machine-btn'));
+    refreshMachines();
   });
-  $('pc-remote-connect').addEventListener('click', () => openDesktopViewer());
-  $('vnc-modal-close').addEventListener('click', closeTargetModal);
-  $('vnc-cancel').addEventListener('click', closeTargetModal);
-  $('vnc-scrim').addEventListener('click', closeTargetModal);
-  $('vnc-save').addEventListener('click', saveTargetFromModal);
-  $('vnc-delete').addEventListener('click', deleteTargetFromModal);
+  $('machine-menu').addEventListener('click', (event) => {
+    const item = event.target.closest('button');
+    if (!item || item.disabled) return;
+    closeMenus();
+    if (item.dataset.machineAdd) { openMachineModal(); return; }
+    if (item.dataset.machine !== undefined && !item.classList.contains('current')) switchMachine(item.dataset.machine);
+  });
+  $('set-machines-list')?.addEventListener('click', onMachineListClick);
+  $('set-add-machine')?.addEventListener('click', () => { closeSettings(); openMachineModal(); });
+  $('vnc-modal-close').addEventListener('click', closeMachineModal);
+  $('vnc-cancel').addEventListener('click', closeMachineModal);
+  $('vnc-scrim').addEventListener('click', closeMachineModal);
+  $('vnc-save').addEventListener('click', saveMachineFromModal);
   $('vnc-modal').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && event.target.matches('input')) {
       event.preventDefault();
-      saveTargetFromModal();
+      saveMachineFromModal();
     }
   });
   wireChromeResizers();
   // Esc closes the machine dialog first, then the full-window desktop view.
   window.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if ($('vnc-modal')?.classList.contains('open')) { closeTargetModal(); return; }
+    if ($('vnc-modal')?.classList.contains('open')) { closeMachineModal(); return; }
     if (document.body.classList.contains('panel-max')) togglePanelMax(false);
   });
   $('auto-approve-all').addEventListener('change', (event) => {

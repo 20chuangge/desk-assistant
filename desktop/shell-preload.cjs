@@ -13,8 +13,10 @@ contextBridge.exposeInMainWorld('deskShell', {
 // preload.mjs). Without it window.desk is undefined and every machine button
 // silently does nothing.
 contextBridge.exposeInMainWorld('desk', {
-  pickMachine: () => ipcRenderer.invoke('desk:pick-machine'),
-  switchHub: (url) => ipcRenderer.invoke('desk:switch-hub', url),
   listMachines: () => ipcRenderer.invoke('desk:list-machines'),
+  switchHub: (url) => ipcRenderer.invoke('desk:switch-hub', url),
   useLocal: () => ipcRenderer.invoke('desk:use-local'),
+  addMachine: (machine) => ipcRenderer.invoke('desk:add-machine', machine),
+  renameMachine: (url, name) => ipcRenderer.invoke('desk:rename-machine', { url, name }),
+  removeMachine: (url) => ipcRenderer.invoke('desk:remove-machine', url),
 });

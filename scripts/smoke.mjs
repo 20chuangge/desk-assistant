@@ -2608,11 +2608,22 @@ function shanghaiWeekday(ts) {
   }
 
 
-  // The Settings → 机器 buttons must actually be wired; "no reaction" is a bug.
+  // One machine concept: the old "看谁的屏幕" take-over list must not come back.
   {
     const html = await fsp.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
-    for (const id of ['set-add-machine', 'set-switch-machine']) {
-      check(`settings button ${id} is wired`, html.includes(`$('${id}')?.addEventListener`) || html.includes(`$('${id}').addEventListener`));
+    check('no separate take-over target list in the UI', !/desk.vncTargets|id="pc-target"/.test(html));
+    const preload = await fsp.readFile(new URL('../desktop/shell-preload.cjs', import.meta.url), 'utf8');
+    check(
+      'the desktop bridge can add, rename and remove machines',
+      ['addMachine', 'renameMachine', 'removeMachine', 'switchHub', 'listMachines'].every((k) => preload.includes(k)),
+    );
+  }
+
+  // The machine controls must actually be wired; "no reaction" is a bug.
+  {
+    const html = await fsp.readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+    for (const id of ['set-add-machine', 'set-machines-list', 'machine-btn', 'machine-menu']) {
+      check(`machine control ${id} is wired`, html.includes(`$('${id}')?.addEventListener`) || html.includes(`$('${id}').addEventListener`));
     }
   }
 

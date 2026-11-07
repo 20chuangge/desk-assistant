@@ -11,7 +11,7 @@
  *   resources/server/config/*   <- seed config, copied to userData on first run
  *   %APPDATA%/Desk/             <- ASSIST_HOME: config, skills, public, workspace, data
  */
-import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, ipcMain, session } from 'electron';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -28,14 +28,20 @@ let tray = null;
 let child = null;
 let quitting = false;
 let serverPort = 0;
-/** When set, this window is a client of a remote hub instead of a local server. */
+/** The machine the window shows: '' is this computer, otherwise a hub URL. */
 let remoteHub = '';
 
 // ---------------------------------------------------------------------------
-// hub config
+// machines
+//
+// A machine is a Desk server: this computer's own (always running, the
+// "本机" entry) or a hub on another box. Each one is its own world - own bots,
+// memory and workspace - so switching machines is just pointing the window at
+// another server. No relaunch: the local server keeps running underneath.
 // ---------------------------------------------------------------------------
 
-const HUB_FILE = path.join(app.getPath('userData'), 'hub.json');
+const HUB_FILE = path.join(app.getPath('userData'), 'hub.json');          // last machine used
+const MACHINES_FILE = path.join(app.getPath('userData'), 'machines.json'); // every remote machine
 
 // A packaged GUI app has nowhere to print. Anything that kills it before the
 // window exists would otherwise be invisible, so keep a small boot log.
@@ -59,20 +65,12 @@ function readHub() {
 }
 
 function writeHub(url) {
-  fs.mkdirSync(path.dirname(HUB_FILE), { recursive: true });
-  fs.writeFileSync(HUB_FILE, `${JSON.stringify({ url, ts: new Date().toISOString() }, null, 2)}\n`);
+  try {
+    if (!url) { fs.unlinkSync(HUB_FILE); return; }
+    fs.mkdirSync(path.dirname(HUB_FILE), { recursive: true });
+    fs.writeFileSync(HUB_FILE, `${JSON.stringify({ url, ts: new Date().toISOString() }, null, 2)}\n`);
+  } catch { /* already gone / read-only profile */ }
 }
-
-function clearHub() {
-  try { fs.unlinkSync(HUB_FILE); } catch { /* already gone */ }
-}
-
-// ---------------------------------------------------------------------------
-// machines: every hub is its own world (own bots, memory, workspace). This
-// list is just a shortcut so switching does not mean typing an address again.
-// ---------------------------------------------------------------------------
-
-const MACHINES_FILE = path.join(app.getPath('userData'), 'machines.json');
 
 function readMachines() {
   try {
@@ -89,56 +87,17 @@ function writeMachines(list) {
   } catch { /* a read-only profile must not break switching */ }
 }
 
-/** Remember a hub we successfully talked to, newest first. */
-function rememberMachine(url) {
+/** Add or update one machine. A name the human gave is never overwritten. */
+function rememberMachine(url, patch = {}) {
   const norm = normalizeHub(url);
-  if (!norm) return;
-  const list = readMachines().filter((m) => m.url !== norm);
-  let name = norm;
-  try { name = new URL(norm).hostname; } catch { /* keep url */ }
-  list.unshift({ url: norm, name, lastUsed: new Date().toISOString() });
-  writeMachines(list.slice(0, 20));
-  return list;
-}
-
-/** Native picker: each machine keeps its own bots, so this is the switcher. */
-async function pickMachine() {
+  if (!norm) return null;
   const list = readMachines();
-  const localActive = !remoteHub;
-  const buttons = [
-    `${localActive ? '● ' : ''}本机（这台电脑）`,
-    ...list.map((m) => `${m.name === remoteHub ? '● ' : ''}${m.name}`),
-    '添加新机器…',
-    '取消',
-  ];
-  const { response } = await dialog.showMessageBox(win || undefined, {
-    type: 'question',
-    title: '切换机器',
-    message: '选择要连接的机器',
-    detail: '每台机器有自己的一套 Bot、记忆和工作区。切换后窗口会重新加载为该机器的界面，不会混在一起。',
-    buttons,
-    defaultId: 0,
-    cancelId: buttons.length - 1,
-    noLink: true,
-  });
-  if (response === buttons.length - 1) return;          // 取消
-  if (response === buttons.length - 2) {                // 添加新机器…
-    await switchHub();
-    return;
-  }
-  if (response === 0) {                                 // 本机（这台电脑）
-    if (!remoteHub) return;
-    clearHub();
-    app.relaunch();
-    app.exit(0);
-    return;
-  }
-  const target = list[response - 1];
-  if (!target || target.url === remoteHub) return;
-  writeHub(target.url);
-  rememberMachine(target.url);
-  app.relaunch();
-  app.exit(0);
+  const prev = list.find((m) => m.url === norm);
+  let fallbackName = norm;
+  try { fallbackName = new URL(norm).hostname; } catch { /* keep url */ }
+  const row = { ...prev, ...patch, url: norm, name: patch.name || prev?.name || fallbackName };
+  writeMachines([row, ...list.filter((m) => m.url !== norm)].slice(0, 30));
+  return row;
 }
 
 function normalizeHub(url) {
@@ -166,57 +125,37 @@ async function probeHub(url) {
   }
 }
 
-function askForHub(current) {
-  return new Promise((resolve) => {
-    const modal = new BrowserWindow({
-      width: 460,
-      height: 268,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      parent: win || undefined,
-      modal: Boolean(win),
-      show: false,
-      title: '连接到 Desk Hub',
-      backgroundColor: '#0b0d12',
-      autoHideMenuBar: true,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.mjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: false,
-      },
+/**
+ * Pair this client with a hub using the code its installer printed, and keep
+ * the session cookie in Electron's store. The human never sees a pairing
+ * screen for a machine Desk configured itself.
+ */
+async function pairWith(url, code) {
+  if (!code) return false;
+  try {
+    const res = await fetch(`${url}/api/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: String(code) }),
+      signal: AbortSignal.timeout(5000),
     });
-
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      ipcMain.removeHandler('desk:set-hub');
-      ipcMain.removeHandler('desk:current-hub');
-      ipcMain.removeHandler('desk:use-local');
-      if (!modal.isDestroyed()) modal.destroy();
-      resolve(value);
-    };
-
-    ipcMain.handle('desk:current-hub', () => current || '');
-    ipcMain.handle('desk:use-local', () => { finish({ mode: 'local' }); return { ok: true }; });
-    ipcMain.handle('desk:set-hub', async (_e, url) => {
-      const normalized = normalizeHub(url);
-      if (!normalized) return { ok: false, error: '地址格式不对，例如 http://192.168.1.20:4390' };
-      const alive = await probeHub(normalized);
-      if (!alive) return { ok: false, error: `连不上 ${normalized}（检查地址、防火墙、ASSIST_ALLOW_REMOTE=1）` };
-      writeHub(normalized);
-      finish({ mode: 'remote', url: normalized });
-      return { ok: true };
+    if (!res.ok) return false;
+    const match = /desk_session=([^;]+)/.exec(res.headers.get('set-cookie') || '');
+    if (!match) return false;
+    await session.defaultSession.cookies.set({
+      url,
+      name: 'desk_session',
+      value: decodeURIComponent(match[1]),
+      httpOnly: true,
+      sameSite: 'lax',
+      expirationDate: Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600,
     });
-
-    modal.once('ready-to-show', () => modal.show());
-    modal.loadFile(path.join(__dirname, 'connect.html'));
-    modal.on('closed', () => finish({ mode: 'local' }));
-  });
+    return true;
+  } catch (err) {
+    bootLog(`pair ${url} failed: ${err?.message || err}`);
+    return false;
+  }
 }
-
 
 // ---------------------------------------------------------------------------
 // paths
@@ -343,7 +282,7 @@ function createWindowFor(url) {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0d12',
-    title: remoteHub ? `Desk — ${remoteHub.replace(/^https?:\/\//, '')}` : 'Desk',
+    title: 'Desk',
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
     show: false,
@@ -424,14 +363,13 @@ function createWindowFor(url) {
   return win;
 }
 
-function createWindow(port) {
-  return createWindowFor(`http://127.0.0.1:${port}/`);
+function localUrl() {
+  return `http://127.0.0.1:${serverPort}/`;
 }
 
 function showWindow() {
   if (!win) {
-    if (remoteHub) createWindowFor(remoteHub);
-    else if (serverPort) createWindow(serverPort);
+    createWindowFor(remoteHub || localUrl());
     return;
   }
   if (win.isMinimized()) win.restore();
@@ -439,46 +377,85 @@ function showWindow() {
   win.focus();
 }
 
-/** Menu action: pick a hub, or come back to this machine. Relaunches cleanly so
- *  the child process / window lifecycle stays simple. */
-async function switchHub() {
-  const choice = await askForHub(remoteHub || readHub());
-  if (!choice || choice.mode === 'remote' && choice.url === remoteHub) return;
-  if (choice.mode === 'local') {
-    if (!remoteHub) return;
-    clearHub();
-    app.relaunch();
-    app.exit(0);
-    return;
+function machineLabel(url) {
+  return readMachines().find((m) => m.url === url)?.name || url.replace(/^https?:\/\//, '');
+}
+
+/**
+ * Point the window at another machine ('' = this computer). The bots, memory
+ * and screen all come from that machine's server, so this IS the switch.
+ */
+async function switchTo(url) {
+  const target = url ? normalizeHub(url) : '';
+  if (url && !target) return { ok: false, error: '地址格式不对' };
+  if (target && !(await probeHub(target))) {
+    return { ok: false, error: `连不上 ${machineLabel(target)}（机器关机了，或网络不通）` };
   }
-  app.relaunch();
-  app.exit(0);
+  remoteHub = target;
+  writeHub(target);
+  if (target) rememberMachine(target, { lastUsed: new Date().toISOString() });
+  bootLog(`switch → ${target || 'local'}`);
+  refreshChrome();
+  if (win && !win.isDestroyed()) {
+    const next = new URL(target || localUrl());
+    next.searchParams.set('shell', 'desk');
+    win.loadURL(next.toString());
+  } else {
+    showWindow();
+  }
+  return { ok: true };
+}
+
+function machinesMenu() {
+  return [
+    { label: '本机（这台电脑）', type: 'radio', checked: !remoteHub, click: () => switchTo('') },
+    ...readMachines().map((m) => ({
+      label: m.name,
+      type: 'radio',
+      checked: m.url === remoteHub,
+      click: () => switchTo(m.url).then((r) => { if (!r.ok) dialog.showErrorBox('切换失败', r.error); }),
+    })),
+  ];
+}
+
+/** Tray and app menu both list the machines; rebuild them after any change. */
+function refreshChrome() {
+  if (win && !win.isDestroyed()) win.setTitle(remoteHub ? `Desk — ${machineLabel(remoteHub)}` : 'Desk');
+  buildMenu();
+  if (!tray) return;
+  tray.setToolTip(remoteHub ? `Desk → ${machineLabel(remoteHub)}` : 'Desk');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '打开 Desk', click: showWindow },
+    { type: 'separator' },
+    ...machinesMenu(),
+    { type: 'separator' },
+    { label: '打开数据目录', click: () => shell.openPath(HOME) },
+    { label: '退出', click: () => { quitting = true; app.quit(); } },
+  ]));
 }
 
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 });
   tray = new Tray(icon);
-  tray.setToolTip(remoteHub ? `Desk → ${remoteHub}` : 'Desk');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开 Desk', click: showWindow },
-    { label: remoteHub ? `已连接：${remoteHub}` : '本机模式', enabled: false },
-    { type: 'separator' },
-    { label: '切换到别的 Hub…', click: switchHub },
-    { label: '打开数据目录', click: () => shell.openPath(HOME) },
-    { type: 'separator' },
-    { label: '退出', click: () => { quitting = true; app.quit(); } },
-  ]));
+  if (HUB_MODE) {
+    // A headless hub has no window and no machine list, only its data folder.
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '打开数据目录', click: () => shell.openPath(HOME) },
+      { label: '退出', click: () => { quitting = true; app.quit(); } },
+    ]));
+    return;
+  }
   tray.on('double-click', showWindow);
+  refreshChrome();
 }
 
 function buildMenu() {
+  if (HUB_MODE) return;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
       label: 'Desk',
       submenu: [
-        { label: '机器…', click: pickMachine },
-        { label: '切换到别的 Hub…', click: switchHub },
-        ...(remoteHub ? [{ label: '回到本机模式', click: async () => { clearHub(); app.relaunch(); app.exit(0); } }] : []),
+        { label: '机器', submenu: machinesMenu() },
         { type: 'separator' },
         { label: '打开数据目录', click: () => shell.openPath(HOME) },
         { label: '重新加载界面', accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
@@ -515,32 +492,41 @@ ipcMain.on('shell:close', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
-// Switch the whole client to another hub and relaunch: this is what "把 Bot
-// 也放到那台机器上" means, and it is different from only viewing a screen.
+// Machine list for the web UI (sidebar switcher, Settings → 机器).
 ipcMain.handle('desk:list-machines', () => ({
   current: remoteHub || '',
   local: !remoteHub,
   machines: readMachines(),
 }));
 
-ipcMain.handle('desk:use-local', () => {
-  clearHub();
-  setTimeout(() => { app.relaunch(); app.exit(0); }, 50);
-  return { ok: true };
-});
+ipcMain.handle('desk:switch-hub', (_event, url) => switchTo(url));
+ipcMain.handle('desk:use-local', () => switchTo(''));
 
-ipcMain.handle('desk:switch-hub', async (_event, url) => {
+// A machine Desk just provisioned: remember it under the human's name and pair
+// with the code its installer printed, so switching to it is one click.
+ipcMain.handle('desk:add-machine', async (_event, { url, name, pairCode } = {}) => {
   const target = normalizeHub(url);
   if (!target) return { ok: false, error: '地址格式不对' };
-  writeHub(target);
-  rememberMachine(target);
-  setTimeout(() => { app.relaunch(); app.exit(0); }, 50);
+  const paired = await pairWith(target, pairCode);
+  rememberMachine(target, { name: String(name || '').trim().slice(0, 40) || undefined, addedAt: new Date().toISOString() });
+  refreshChrome();
+  return { ok: true, url: target, paired };
+});
+
+ipcMain.handle('desk:rename-machine', (_event, { url, name } = {}) => {
+  const target = normalizeHub(url);
+  const clean = String(name || '').trim().slice(0, 40);
+  if (!target || !clean) return { ok: false, error: '名字不能为空' };
+  rememberMachine(target, { name: clean });
+  refreshChrome();
   return { ok: true };
 });
 
-// The UI asks for the machine picker so "切换机器" is one click from the panel.
-ipcMain.handle('desk:pick-machine', async () => {
-  await pickMachine();
+ipcMain.handle('desk:remove-machine', async (_event, url) => {
+  const target = normalizeHub(url);
+  writeMachines(readMachines().filter((m) => m.url !== target));
+  if (target && target === remoteHub) await switchTo('');
+  else refreshChrome();
   return { ok: true };
 });
 
@@ -570,48 +556,28 @@ if (!gotLock) {
         return;
       }
 
-      // A hub is either explicitly requested (env) or remembered from last time.
-      // If it does not answer we ASK. Silently falling back to a local instance
-      // is how a bot ends up opening the laptop's Chrome while the human thinks
-      // they are driving the VM — the two machines are not interchangeable.
-      const candidate = normalizeHub(process.env.DESK_HUB_URL || '') || readHub();
-      if (candidate && !DEV_URL) {
-        let reachable = await probeHub(candidate);
-        for (let attempt = 0; !reachable && attempt < 2; attempt += 1) {
-          await new Promise((r) => setTimeout(r, 1500));
-          reachable = await probeHub(candidate);
-        }
-        if (reachable) {
-          remoteHub = candidate;
-          rememberMachine(candidate);
-          bootLog(`remote mode → ${candidate}`);
-          console.log(`[desk] remote mode → ${candidate}`);
-          buildMenu();
-          createWindowFor(candidate);
-          createTray();
-          return;
-        }
-        // Unreachable hub: fall straight back to this computer. The picker
-        // (机器…) still lists the hub, so retrying is one click away; blocking
-        // the launch with a modal every time the VM sleeps is worse.
-        bootLog(`hub unreachable → local mode (${candidate})`);
-        console.warn(`[desk] hub ${candidate} unreachable; running locally`);
-      }
-
-      let port;
+      // This computer's server always runs: it is the "本机" machine, and
+      // switching back to it must be instant.
       if (DEV_URL) {
-        port = 0;
         console.log('[desk] dev mode, loading', DEV_URL);
       } else {
-        bootLog(`local mode (no hub configured)`);
         await prepareHome();
-        port = await startServer();
+        const port = await startServer();
         console.log(`[desk] server ready on http://127.0.0.1:${port}/ (home: ${HOME})`);
       }
-      buildMenu();
-      createWindow(port);
+
+      // Reopen the machine used last time. If it does not answer (the VM is
+      // asleep), start on this computer; the machine list still has it.
+      const candidate = normalizeHub(process.env.DESK_HUB_URL || '') || readHub();
+      if (candidate && !DEV_URL && await probeHub(candidate)) {
+        remoteHub = candidate;
+        rememberMachine(candidate);
+        bootLog(`remote → ${candidate}`);
+      } else if (candidate) {
+        bootLog(`hub unreachable → local (${candidate})`);
+      }
+      createWindowFor(DEV_URL || remoteHub || localUrl());
       createTray();
-      if (DEV_URL) win.loadURL(DEV_URL);
     } catch (err) {
       dialog.showErrorBox('Desk 启动失败', String(err?.stack || err));
       app.quit();

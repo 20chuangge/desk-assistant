@@ -161,6 +161,7 @@ export async function computerSnapshot({ screenshotPath } = {}) {
       release: os.release(),
       arch: process.arch,
       hostname: os.hostname(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
       node: process.versions.node,
       uptimeSec: Math.round(os.uptime()),
       displayAvailable: displayAvailable(),
