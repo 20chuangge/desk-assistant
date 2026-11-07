@@ -79,7 +79,14 @@ import {
   lanUrlFor,
 } from './auth.mjs';
 
-const VERSION = '1.0.0';
+// One version for the hub and the app: package.json (shipped with every hub).
+const VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 const HOST = process.env.HOST || '127.0.0.1';
 const DEFAULT_PORT = Number(process.env.PORT ?? 4390);
 const MAX_BODY_BYTES = 1024 * 1024;
