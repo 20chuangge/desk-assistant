@@ -7343,6 +7343,9 @@ async function refreshMachines() {
 async function switchMachine(url) {
   closeMenus();
   if (!window.desk) return;
+  const name = url ? ((machineBridge?.machines || []).find((m) => m.url === url)?.name || url.replace(/^https?:\/\//, '')) : '本机';
+  // Say something at once: reaching a machine can take a few seconds.
+  toast(`正在切换到「${name}」…`);
   const res = url ? await window.desk.switchHub(url) : await window.desk.useLocal();
   if (!res?.ok) toast(res?.error || '切换失败', true);
 }

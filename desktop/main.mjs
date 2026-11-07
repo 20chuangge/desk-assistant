@@ -342,10 +342,9 @@ function launchServer({ host, port }) {
 // window / tray / menu
 // ---------------------------------------------------------------------------
 
-function createWindowFor(url) {
+function createWindowFor(url, bounds = null) {
   win = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...(bounds || { width: 1280, height: 860 }),
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0d12',
@@ -366,8 +365,16 @@ function createWindowFor(url) {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
-  win.on('closed', () => { win = null; });
+  const self = win;
+  self.once('ready-to-show', () => self.show());
+  // A replaced window must not clear the reference to its replacement.
+  self.on('closed', () => { if (win === self) win = null; });
+  // Leave a trail when a page fails, so a stuck switch can be explained.
+  self.webContents.on('did-fail-load', (_e, code, desc, failedUrl, isMainFrame) => {
+    if (isMainFrame && code !== -3) bootLog(`load failed ${code} ${desc} ${failedUrl}`);
+  });
+  self.webContents.on('render-process-gone', (_e, details) => bootLog(`renderer gone: ${details.reason}`));
+  self.on('unresponsive', () => bootLog('window unresponsive'));
 
   // external links open in the real browser, never inside the app window
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -467,11 +474,39 @@ async function switchTo(url, message = '') {
   if (win && !win.isDestroyed()) {
     const next = new URL(target || localUrl());
     next.searchParams.set('shell', 'desk');
-    win.loadURL(next.toString());
+    const seq = ++switchSeq;
+    win.loadURL(next.toString()).catch((err) => {
+      // ERR_ABORTED just means a newer switch replaced this one.
+      if (seq === switchSeq) bootLog(`switch load error: ${err.code || err.message}`);
+    });
+    watchSwitch(seq, next.origin);
   } else {
     showWindow();
   }
   return { ok: true };
+}
+
+let switchSeq = 0;
+
+/**
+ * Seen in the field: the switch was accepted, but the window kept showing
+ * the old machine and no page ever loaded again. If the new machine's page has
+ * not taken over in 10 s, open a fresh window on it in the same place.
+ */
+function watchSwitch(seq, origin) {
+  setTimeout(() => {
+    if (seq !== switchSeq || !win || win.isDestroyed()) return;
+    let current = '';
+    try { current = new URL(win.webContents.getURL()).origin; } catch { /* about:blank */ }
+    if (current === origin && !win.webContents.isLoading()) return;
+    bootLog(`switch stuck on ${current || 'nothing'} → reopening the window on ${origin}`);
+    const old = win;
+    const bounds = old.getBounds();
+    const maximized = old.isMaximized();
+    createWindowFor(remoteHub || localUrl(), bounds);
+    if (maximized) win.maximize();
+    old.destroy();
+  }, 10000);
 }
 
 function machinesMenu() {
