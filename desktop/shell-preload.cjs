@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld('desk', {
   renameMachine: (url, name) => ipcRenderer.invoke('desk:rename-machine', { url, name }),
   removeMachine: (url) => ipcRenderer.invoke('desk:remove-machine', url),
   syncModel: () => ipcRenderer.invoke('desk:sync-model'),
+  syncVoice: (voice) => ipcRenderer.invoke('desk:sync-voice', voice),
 });

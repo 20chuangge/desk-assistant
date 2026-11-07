@@ -2742,7 +2742,7 @@
         </form>
         <div class="model-share" id="model-share" hidden>
           <div class="dsec-head" style="font-size:13px;margin:22px 0 6px">所有机器共用一个模型</div>
-          <div class="row-note">新添加的机器会自动用上本机的模型。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。</div>
+          <div class="row-note">新添加的机器会自动用上本机的模型和语音密钥。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。</div>
           <button class="btn" id="model-sync" type="button" style="margin-top:10px">同步到所有机器</button>
           <div class="row-note" id="model-sync-note" hidden></div>
         </div>
@@ -5208,6 +5208,19 @@ async function saveVoice(clear = false) {
   try {
     await api('/api/voice', { method: 'PUT', body });
     await loadVoice();
+    // In the desktop app a new key goes to every machine at once: hubs never
+    // give a key back, so this is the moment it can travel.
+    if (!clear && body.apiKey && window.desk?.syncVoice) {
+      const res = await window.desk.syncVoice(body).catch(() => null);
+      const failed = (res?.results || []).filter((r) => !r.ok);
+      toast(
+        !res?.ok ? '语音设置已保存（没同步到其他机器）'
+          : failed.length ? `语音设置已保存；没同步上：${failed.map((r) => `${r.name}（${r.error}）`).join('、')}`
+          : '语音设置已保存，并同步到所有机器',
+        Boolean(failed.length || !res?.ok),
+      );
+      return;
+    }
     toast(clear ? '语音密钥已清除' : '语音设置已保存');
   } catch (err) {
     toast(`保存失败：${err.message}`, true);
@@ -6861,7 +6874,7 @@ async function syncModelToMachines() {
     const done = res.results.filter((r) => r.ok).map((r) => r.name);
     const failed = res.results.filter((r) => !r.ok).map((r) => `${r.name}（${r.error}）`);
     note.textContent = [
-      done.length ? `已同步 ${res.model} 到：${done.join('、')}` : '',
+      done.length ? (res.voice ? `已同步 ${res.model} 和语音密钥到：${done.join('、')}` : `已同步 ${res.model} 到：${done.join('、')}`) : '',
       failed.length ? `没同步上：${failed.join('、')}` : '',
     ].filter(Boolean).join('；');
     toast(failed.length ? '有机器没同步上' : '模型已同步到所有机器', Boolean(failed.length));

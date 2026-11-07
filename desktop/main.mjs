@@ -607,21 +607,53 @@ ipcMain.handle('desk:sync-model', async () => {
   if (!model.provider || model.provider === 'mock') {
     return { ok: false, error: L('这台电脑还没配置真实模型，先在本机的「设置 → 模型」里配好。', 'This computer has no real model yet; set one up under Settings → Model on this computer first.') };
   }
+  // The voice key rides along when this computer has one.
+  let voice = null;
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(HOME, 'data', 'voice.json'), 'utf8'));
+    if (v?.apiKey) voice = { baseUrl: v.baseUrl || '', model: v.model || '', apiKey: v.apiKey };
+  } catch { /* no voice key here */ }
   const results = [];
   for (const machine of readMachines()) {
-    try {
-      const res = await net.fetch(`${machine.url}/api/settings`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(model),
-        signal: AbortSignal.timeout(8000),
-      });
-      results.push({ name: machine.name, ok: res.ok, error: res.ok ? '' : (res.status === 401 ? L('未配对', 'not paired') : `HTTP ${res.status}`) });
-    } catch (err) {
-      results.push({ name: machine.name, ok: false, error: L('连不上', 'unreachable') });
+    const r = await putToMachine(machine.url, '/api/settings', model);
+    if (r.ok && voice) {
+      const v = await putToMachine(machine.url, '/api/voice', voice);
+      if (!v.ok) Object.assign(r, { ok: false, error: L(`语音：${v.error}`, `voice: ${v.error}`) });
     }
+    results.push({ name: machine.name, ...r });
   }
-  return { ok: true, model: `${model.provider} · ${model.model}`, results };
+  return { ok: true, model: `${model.provider} · ${model.model}`, voice: Boolean(voice), results };
+});
+
+/** PUT JSON to a hub with this app's pairing cookie. -> {ok, error} */
+async function putToMachine(url, apiPath, body) {
+  try {
+    const res = await net.fetch(`${url}${apiPath}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    return { ok: res.ok, error: res.ok ? '' : (res.status === 401 ? L('未配对', 'not paired') : `HTTP ${res.status}`) };
+  } catch {
+    return { ok: false, error: L('连不上', 'unreachable') };
+  }
+}
+
+/**
+ * A voice key saved on any machine goes to all of them (this computer too),
+ * while the UI still holds it: hubs never hand a key back out.
+ */
+ipcMain.handle('desk:sync-voice', async (_event, voice = {}) => {
+  const body = { baseUrl: String(voice.baseUrl || ''), model: String(voice.model || ''), apiKey: String(voice.apiKey || '') };
+  if (!body.apiKey) return { ok: false, error: L('没有密钥可同步', 'no key to sync') };
+  const targets = [{ name: L('本机', 'This computer'), url: localUrl() }, ...readMachines()];
+  const results = [];
+  for (const machine of targets) {
+    if (!machine.url) continue;
+    results.push({ name: machine.name, ...(await putToMachine(machine.url.replace(/\/+$/, ''), '/api/voice', body)) });
+  }
+  return { ok: true, results };
 });
 
 ipcMain.handle('desk:rename-machine', (_event, { url, name } = {}) => {

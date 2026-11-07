@@ -141,6 +141,10 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
       if (!s?.provider || s.provider === 'mock') return null;
       return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: state.apiKey || '' };
     },
+    voiceToShare: () => {
+      const v = state?.voice;
+      return v?.apiKey ? { baseUrl: v.baseUrl, model: v.model, apiKey: v.apiKey } : null;
+    },
   });
 
   // Per-bot desktops read the VNC password the installer stored, if any.

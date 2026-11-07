@@ -802,4 +802,9 @@ window.DESK_I18N_EN = {
   "打不开麦克风：{0}": "Could not open the microphone: {0}",
   "太短了，没听到内容": "Too short, nothing was heard",
   "没听清，再说一次？": "Did not catch that. Try again?",
+  "新添加的机器会自动用上本机的模型和语音密钥。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。": "Machines you add get this computer’s model and voice key automatically. For machines added earlier, press the button below to copy this computer’s model and keys to them.",
+  "语音设置已保存（没同步到其他机器）": "Voice settings saved (not copied to other machines)",
+  "语音设置已保存；没同步上：{0}": "Voice settings saved; not copied to: {0}",
+  "语音设置已保存，并同步到所有机器": "Voice settings saved and copied to every machine",
+  "已同步 {0} 和语音密钥到：{1}": "Copied {0} and the voice key to: {1}",
 };
