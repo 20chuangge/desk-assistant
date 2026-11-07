@@ -26,6 +26,10 @@ npm run desktop:build    # 出 Windows 安装包 → desktop/dist/
 
 需要 Node ≥ 20。添加远程机器、空白机测试方案见 `docs/`（`HUB.md`、`TEST-PLAN.md`）。
 
+## 许可证
+
+[MIT](LICENSE)：可以自由使用、修改和再分发，保留版权声明即可。
+
 ---
 
 以下是开发参考（架构、接口、扩展方式）。
