@@ -182,7 +182,14 @@ DISP="$1"
 [ -n "$DISP" ] || exit 1
 export DISPLAY=":$DISP"
 export XDG_SESSION_TYPE=x11
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# Each bot session gets its own runtime dir and bus. Sharing /run/user/<uid>
+# with a logged-in GNOME (Wayland) session made XFCE pick up that session's
+# environment: xfwm4 and the panel tried DISPLAY=wayland-0 and exited.
+export XDG_RUNTIME_DIR="/tmp/desk-runtime-$(id -u)-$DISP"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
 export LIBGL_ALWAYS_SOFTWARE=1
 export NO_AT_BRIDGE=1
 MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
@@ -191,9 +198,26 @@ if [ "${DESK_BOT_GNOME:-0}" = 1 ] && command -v gnome-session >/dev/null 2>&1 &&
   exec dbus-launch --exit-with-session gnome-session
 fi
 export XDG_CURRENT_DESKTOP=XFCE
+# Skip the panel's first-run "default or empty config?" dialog on a new desktop.
+export XFCE_PANEL_MIGRATE_DEFAULT=1
 exec dbus-launch --exit-with-session xfce4-session
 DESK_SESSION_EOF
 chmod 755 /usr/local/bin/desk-bot-session
+
+# Nothing may pop up over a bot's screen or lock it: no crash-report dialogs,
+# no screen locker, no screensaver.
+if [ -f /etc/default/apport ]; then
+  sed -i 's/^enabled=1/enabled=0/' /etc/default/apport
+  systemctl disable --now apport.service >/dev/null 2>&1 || true
+  rm -f /var/crash/*.crash 2>/dev/null || true
+fi
+RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+mkdir -p "$RUN_HOME/.config/autostart"
+for app in light-locker xfce4-screensaver xscreensaver update-notifier ubuntu-advantage-notification \
+           ubuntu-report-on-upgrade gnome-initial-setup-first-login orca-autostart; do
+  printf '[Desktop Entry]\nType=Application\nName=%s\nHidden=true\n' "$app" > "$RUN_HOME/.config/autostart/$app.desktop"
+done
+chown -R "$RUN_USER:$RUN_GROUP" "$RUN_HOME/.config"
 
 # ---------------------------------------------------------------------------
 say "4/7 程序 → $APP_DIR"
