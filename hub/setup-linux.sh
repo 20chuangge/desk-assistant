@@ -155,13 +155,13 @@ if [ "$PM" = apt ]; then
   pm_install xvfb x11vnc websockify novnc dbus-x11
   has chromium || has chromium-browser || pm_install chromium-browser
   has chromium || has chromium-browser || pm_install chromium
-  if ! has xfce4-session && ! has gnome-session; then
+  if ! has xfce4-session; then
     say "安装 XFCE（约 1-2 分钟）"
     pm_install xfce4 xfce4-terminal
   fi
 else
   pm_install xorg-x11-server-Xvfb x11vnc python3-websockify novnc dbus-x11 chromium
-  if ! has xfce4-session && ! has gnome-session; then
+  if ! has xfce4-session; then
     say "安装 XFCE（约 2-4 分钟）"
     "$PM" -y -q groupinstall "Xfce" >/dev/null 2>&1 || pm_install xfce4-session xfwm4 xfdesktop xfce4-panel xfce4-terminal
   fi
@@ -171,7 +171,9 @@ for bin in Xvfb x11vnc websockify; do
   has "$bin" || { warn "缺 $bin，Bot 桌面用不了；Hub 本身不受影响"; DESKTOP_OK=0; }
 done
 [ -d /usr/share/novnc ] || { warn "缺 noVNC 网页（/usr/share/novnc）"; DESKTOP_OK=0; }
-has xfce4-session || has gnome-session || { warn "桌面环境没装成，Bot 桌面会是黑屏"; DESKTOP_OK=0; }
+# Bot desktops run XFCE: GNOME does not start inside a bare Xvfb, so a machine
+# that already has GNOME still needs XFCE for its bots.
+has xfce4-session || { warn "XFCE 没装成，Bot 桌面会是黑屏"; DESKTOP_OK=0; }
 
 # One desktop session per bot display (GNOME when the host has the memory).
 cat > /usr/local/bin/desk-bot-session <<'DESK_SESSION_EOF'

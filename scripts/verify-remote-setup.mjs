@@ -161,6 +161,7 @@ try {
       ['本机 /api/health 应答', /"ok"\s*:\s*true/.test(pf.health.output)],
       ['拿到了配对码', Boolean(job.pairCode)],
       ['每 Bot 桌面会话脚本已安装', !/missing/.test(pf.sessionHelper.output)],
+      ['Bot 桌面需要的程序齐全（Xvfb、x11vnc、websockify、XFCE）', ['Xvfb', 'x11vnc', 'websockify', 'xfce4-session'].every((t) => pf.desktopTools.output.includes(t))],
     ];
     console.log('\n=== 结论检查 ===');
     for (const [name, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);

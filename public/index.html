@@ -2206,6 +2206,59 @@
     .composer { padding-left: 10px; padding-right: 10px; }
     .chat-head .sub { display: none; }
   }
+
+  /* =====================================================================
+     v5: quieter chrome
+     - sidebar footer is one settings button
+     - assistant replies read like a document (no bubble); the human's own
+       messages are the only bubbles, in a soft violet so the turn-taking
+       is obvious at a glance
+     ===================================================================== */
+  :root {
+    --bubble-user: #2a2640;
+    --bubble-user-border: rgba(160, 140, 255, 0.18);
+    --bubble-user-text: #eeebff;
+  }
+  html[data-theme="light"] {
+    --bubble-user: #eeeaff;
+    --bubble-user-border: rgba(106, 76, 255, 0.14);
+    --bubble-user-text: #221a4d;
+  }
+  @media (prefers-color-scheme: light) {
+    html:not([data-theme]) {
+      --bubble-user: #eeeaff;
+      --bubble-user-border: rgba(106, 76, 255, 0.14);
+      --bubble-user-text: #221a4d;
+    }
+  }
+
+  .sidebar-bottom { padding: 8px 10px calc(10px + var(--safe-b)); border-top: 0; }
+  .side-actions { display: block; }
+  #settings-btn {
+    width: 100%; min-height: 34px; padding: 6px 10px; gap: 9px;
+    font-size: 13px; color: var(--muted); border-radius: 9px;
+  }
+  #settings-btn:hover { color: var(--text); }
+  #settings-btn .dot { margin-left: auto; width: 6px; height: 6px; }
+  #settings-btn .dot.ok { opacity: 0; }          /* healthy is the normal state: say nothing */
+
+  .row.user .bubble,
+  html[data-theme="light"] .row.user .bubble {
+    background: var(--bubble-user); color: var(--bubble-user-text);
+    border: 1px solid var(--bubble-user-border);
+    border-radius: 18px 18px 6px 18px; padding: 9px 15px;
+    box-shadow: none;
+  }
+  .row.assistant .bubble,
+  html[data-theme="light"] .row.assistant .bubble {
+    background: transparent; border-color: transparent; box-shadow: none;
+    padding: 2px 0; max-width: 100%; border-radius: 0;
+  }
+
+  .tabs { gap: 2px; }
+  .tabs .tab { flex: 0 0 auto; padding-left: 14px; padding-right: 14px; }
+  .tabs .panel-close { margin-left: auto; }
+  #sec-skills .section-head, #sec-memory .section-head { margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -2218,21 +2271,6 @@
     <button type="button" data-win="min" aria-label="最小化" title="最小化">&#8211;</button>
     <button type="button" data-win="max" aria-label="最大化" title="最大化">&#9633;</button>
     <button type="button" data-win="close" class="win-close" aria-label="关闭" title="关闭">&#10005;</button>
-  </div>
-
-  <div class="account-menu" id="account-menu" hidden>
-    <div class="am-head">
-      <span class="am-avatar" id="am-avatar">D</span>
-      <div>
-        <div class="am-name" id="am-name">Desk</div>
-        <div class="am-sub" id="am-sub">本机模式</div>
-      </div>
-    </div>
-    <div class="am-actions">
-      <button class="am-action" id="am-pair" type="button">手机配对 <span aria-hidden="true">›</span></button>
-      <button class="am-action" id="am-settings" type="button">设置 <span aria-hidden="true">›</span></button>
-    </div>
-    <div class="am-note">数据保存在这台电脑上，不会上传到云端。</div>
   </div>
 
   <div class="main">
@@ -2289,28 +2327,11 @@
       </div><!-- /sidebar-scroll -->
 
       <div class="sidebar-bottom" id="sidebar-bottom">
-        <button class="side-account" id="account-btn" type="button" aria-label="账户与设备" title="账户与设备">
-          <span class="am-avatar" id="side-avatar">D</span>
-          <span class="side-account-text">
-            <b id="side-account-name">Desk</b>
-            <small id="side-account-sub">本机模式</small>
-          </span>
-          <span class="side-account-more" aria-hidden="true">⋯</span>
-        </button>
-        <div class="side-meta">
-          <div class="pill" id="model-pill" title="模型">
-            <span class="dot" id="health-dot"></span>
-            <span id="model-label">mock</span>
-          </div>
-        </div>
         <div class="side-actions">
-          <button class="side-action" id="theme-btn" type="button" title="切换外观">
-            <span id="theme-btn-glyph" aria-hidden="true">◐</span>
-            <span id="theme-btn-label">跟随系统</span>
-          </button>
           <button class="side-action" id="settings-btn" type="button" title="设置">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="7" cy="17" r="2"/></svg>
             <span>设置</span>
+            <span class="dot" id="health-dot" aria-hidden="true"></span>
           </button>
         </div>
       </div>
@@ -2366,24 +2387,34 @@
       <div class="edge-resizer panel-resizer" id="panel-resizer" role="separator" aria-orientation="vertical" aria-label="调整面板宽度"></div>
       <div class="grip" id="panel-grip" aria-hidden="true"><span></span></div>
       <div class="tabs" role="tablist" aria-label="面板页签">
-        <button class="tab active" data-tab="activity" role="tab" aria-selected="true">活动</button>
-        <button class="tab" data-tab="computer" role="tab" aria-selected="false">电脑</button>
-        <button class="tab" data-tab="skills" role="tab" aria-selected="false">技能</button>
-        <button class="tab" data-tab="routines" role="tab" aria-selected="false">定时任务</button>
-        <button class="tab" data-tab="memory" role="tab" aria-selected="false">记忆</button>
+        <button class="tab active" data-tab="computer" role="tab" aria-selected="true">电脑</button>
+        <button class="tab" data-tab="activity" role="tab" aria-selected="false">任务</button>
         <button class="icon-btn sm panel-close" id="panel-close" aria-label="关闭面板">✕</button>
       </div>
       <div class="panel-body">
-        <div class="pane active" id="pane-activity" role="tabpanel">
-          <div class="section-head"><span>实时事件</span><span id="activity-count" class="mono">0</span></div>
-          <label class="switch-row" for="show-process">
-            <input type="checkbox" id="show-process" />
-            <span>在对话里显示工具过程</span>
-          </label>
+        <div class="pane" id="pane-activity" role="tabpanel">
+          <div class="section-head"><span>定时任务</span><button class="btn tiny" id="new-routine-btn">+ 新建</button></div>
+          <div class="card" id="routine-form-card" style="display:none">
+            <div class="form-grid">
+              <input class="field" id="rt-name" placeholder="名字（例如：早间简报）" autocomplete="off" />
+              <textarea class="field" id="rt-instruction" rows="2" placeholder="给这个助手的指令…"></textarea>
+              <div class="row-2">
+                <select class="field" id="rt-bot"></select>
+                <input class="field" id="rt-schedule" value="every 60 minutes" autocomplete="off" />
+              </div>
+              <div class="row-2">
+                <button class="btn primary tiny" id="rt-save">创建定时任务</button>
+                <button class="btn tiny" id="rt-cancel">取消</button>
+              </div>
+              <div class="tiny muted">时间写法：“every 30 minutes”，或 5 段 cron，例如 “0 9 * * 1-5”。</div>
+            </div>
+          </div>
+          <div id="routines-list"></div>
+          <div class="section-head" style="margin-top:18px"><span>最近动态</span><span id="activity-count" class="mono">0</span></div>
           <div id="activity-list"></div>
         </div>
 
-        <div class="pane" id="pane-computer" role="tabpanel">
+        <div class="pane active" id="pane-computer" role="tabpanel">
           <div class="section-head">
             <span id="pc-title">屏幕</span>
             <span class="pc-actions">
@@ -2407,53 +2438,13 @@
           <div id="pc-procs"></div>
         </div>
 
-        <div class="pane" id="pane-skills" role="tabpanel">
-          <div class="section-head"><span>共享技能库</span><span id="skills-count" class="mono">0</span></div>
-          <div id="skills-list"></div>
-        </div>
-
-        <div class="pane" id="pane-routines" role="tabpanel">
-          <div class="section-head"><span>定时运行</span><button class="btn tiny" id="new-routine-btn">+ 新建</button></div>
-          <div class="card" id="routine-form-card" style="display:none">
-            <div class="form-grid">
-              <input class="field" id="rt-name" placeholder="名字（例如：早间简报）" autocomplete="off" />
-              <textarea class="field" id="rt-instruction" rows="2" placeholder="给这个助手的指令…"></textarea>
-              <div class="row-2">
-                <select class="field" id="rt-bot"></select>
-                <input class="field" id="rt-schedule" value="every 60 minutes" autocomplete="off" />
-              </div>
-              <div class="row-2">
-                <button class="btn primary tiny" id="rt-save">创建定时任务</button>
-                <button class="btn tiny" id="rt-cancel">取消</button>
-              </div>
-              <div class="tiny muted">时间写法：“every 30 minutes”，或 5 段 cron，例如 “0 9 * * 1-5”。</div>
-            </div>
-          </div>
-          <div id="routines-list"></div>
-        </div>
-
-        <div class="pane" id="pane-memory" role="tabpanel">
-          <div class="section-head"><span id="memory-title">记忆</span><button class="btn tiny" id="memory-refresh">刷新</button></div>
-          <div class="card">
-            <div class="card-title">共享记忆</div>
-            <div class="card-sub mono tiny" id="shared-path">—</div>
-            <pre class="mem-pre" id="shared-pre" style="margin-top:8px">正在读取…</pre>
-          </div>
-          <div class="card">
-            <div class="card-title" id="bot-memory-title">这个助手的记忆</div>
-            <div class="card-sub mono tiny" id="bot-memory-path">—</div>
-            <pre class="mem-pre" id="bot-memory-pre" style="margin-top:8px">正在读取…</pre>
-          </div>
-        </div>
       </div>
     </aside>
   </div>
 
   <nav class="mobilenav" id="mobilenav" aria-label="工作面板">
-    <button class="navitem" data-tab="activity" aria-label="活动"><span class="navglyph" aria-hidden="true">◎</span><span>活动</span></button>
-    <button class="navitem" data-tab="skills" aria-label="技能"><span class="navglyph" aria-hidden="true">✦</span><span>技能</span></button>
-    <button class="navitem" data-tab="routines" aria-label="定时任务"><span class="navglyph" aria-hidden="true">⏱</span><span>定时</span></button>
-    <button class="navitem" data-tab="memory" aria-label="记忆"><span class="navglyph" aria-hidden="true">◈</span><span>记忆</span></button>
+    <button class="navitem" data-tab="computer" aria-label="电脑"><span class="navglyph" aria-hidden="true">▣</span><span>电脑</span></button>
+    <button class="navitem" data-tab="activity" aria-label="任务"><span class="navglyph" aria-hidden="true">◎</span><span>任务</span></button>
   </nav>
 </div>
 
@@ -2471,6 +2462,8 @@
       <button class="setnav active" type="button" data-set-target="sec-model">模型</button>
       <button class="setnav" type="button" data-set-target="sec-run">运行方式</button>
       <button class="setnav" type="button" data-set-target="sec-machines">机器</button>
+      <button class="setnav" type="button" data-set-target="sec-skills">技能</button>
+      <button class="setnav" type="button" data-set-target="sec-memory">记忆</button>
       <button class="setnav" type="button" data-set-target="sec-appearance">外观</button>
       <button class="setnav" type="button" data-set-target="sec-pair">手机配对</button>
       <button class="setnav" type="button" data-set-target="sec-about">关于</button>
@@ -2532,6 +2525,28 @@
         </div>
       </section>
 
+      <section class="dsec" id="sec-skills">
+        <div class="dsec-head">技能</div>
+        <div class="dsec-hint">所有助手共用的做事方法。助手学会新做法时会自己存进来。</div>
+        <div class="section-head"><span>技能库</span><span id="skills-count" class="mono">0</span></div>
+        <div id="skills-list"></div>
+      </section>
+
+      <section class="dsec" id="sec-memory">
+        <div class="dsec-head">记忆</div>
+        <div class="section-head"><span id="memory-title">当前助手</span><button class="btn tiny" id="memory-refresh">刷新</button></div>
+        <div class="card">
+          <div class="card-title">共享记忆</div>
+          <div class="card-sub mono tiny" id="shared-path">—</div>
+          <pre class="mem-pre" id="shared-pre" style="margin-top:8px">正在读取…</pre>
+        </div>
+        <div class="card">
+          <div class="card-title" id="bot-memory-title">这个助手的记忆</div>
+          <div class="card-sub mono tiny" id="bot-memory-path">—</div>
+          <pre class="mem-pre" id="bot-memory-pre" style="margin-top:8px">正在读取…</pre>
+        </div>
+      </section>
+
       <section class="dsec" id="sec-appearance">
         <div class="dsec-head">外观</div>
         <div class="seg" id="theme-seg" role="radiogroup" aria-label="界面主题">
@@ -2540,6 +2555,10 @@
           <button class="seg-btn" type="button" data-theme-choice="system" role="radio" aria-checked="false">跟随系统</button>
         </div>
         <div class="row-note">切换立即生效，只记在这台设备上。</div>
+        <label class="switch-row" for="show-process" style="margin-top:12px">
+          <input type="checkbox" id="show-process" />
+          <span>在对话里显示工具过程</span>
+        </label>
 
         <div class="dsec-head" style="margin-top:20px">时区</div>
         <p class="dsec-sub">定时任务、时间和日志都按这个时区理解。用远程机器时，可以让它跟着那台机器走。</p>
@@ -2790,7 +2809,7 @@ const state = {
   stream: null,
   seenEvents: new Set(),
   liveTurn: null,
-  tab: 'activity',
+  tab: 'computer',
   sending: false,
   unconfigured: false,
   mockAck: false,
@@ -4198,9 +4217,8 @@ function updateModelUi() {
   state.unconfigured = info.unconfigured;
 
   const label = info.provider === 'mock' ? '演示模式' : (info.model !== '—' ? info.model : info.provider);
-  $('model-label').textContent = label.slice(0, 44);
-  $('model-pill').title = `服务商：${info.provider} · 模型：${info.model} · 密钥：${info.hasKey ? '已保存' : '未设置'}`;
-  $('model-pill').classList.toggle('warn', info.unconfigured);
+  // The model lives in Settings; the footer only says whether it is healthy.
+  if ($('settings-btn')) $('settings-btn').title = `设置 · ${label.slice(0, 44)}${info.unconfigured ? '（未配置）' : ''}`;
 
   updateComposerMode();
 
@@ -4251,8 +4269,8 @@ async function pollHealth() {
     state.health = await api('/api/health');
     $('health-dot').className = `dot ${state.health.ok ? 'ok' : 'bad'}`;
     const m = state.health.model || {};
-    if ((state.settings && state.settings.model && state.settings.model.provider) === undefined) {
-      $('model-label').textContent = m.provider === 'mock' ? '演示模式' : `${m.model || m.provider}`.slice(0, 44);
+    if ((state.settings && state.settings.model && state.settings.model.provider) === undefined && $('settings-btn')) {
+      $('settings-btn').title = `设置 · ${m.provider === 'mock' ? '演示模式' : `${m.model || m.provider}`.slice(0, 44)}`;
     }
   } catch (err) {
     $('health-dot').className = 'dot bad';
@@ -6191,6 +6209,8 @@ function setSettingsNav(sectionId) {
 
 function openSettings(section) {
   renderMachinesList();
+  loadSkills();
+  loadMemory();
   loadSettings().catch(() => { /* keep whatever we have */ });
   loadPolicy().catch(() => { /* older server: switch stays off */ });
   closeSidebar();
@@ -6368,6 +6388,9 @@ async function clearKey() {
    tabs, drawers, layout
    --------------------------------------------------------------------- */
 function switchTab(name) {
+  // Skills and memory live in Settings now; routines are part of 任务.
+  if (name === 'skills' || name === 'memory') { openSettings(name === 'skills' ? 'sec-skills' : 'sec-memory'); return; }
+  if (name === 'routines') name = 'activity';
   state.tab = name;
   document.querySelectorAll('.tab').forEach((t) => {
     const on = t.dataset.tab === name;
@@ -6376,10 +6399,7 @@ function switchTab(name) {
   });
   document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('active', p.id === `pane-${name}`));
   document.querySelectorAll('.navitem').forEach((n) => n.classList.toggle('active', n.dataset.tab === name));
-  if (name === 'skills') loadSkills();
-  if (name === 'routines') loadRoutines();
-  if (name === 'memory') loadMemory();
-  if (name === 'activity') loadActivity();
+  if (name === 'activity') { loadActivity(); loadRoutines(); }
   if (name === 'computer') {
     loadComputer();
     refreshScreen();
@@ -6489,21 +6509,6 @@ async function refreshScreen() {
   }
 }
 
-/* The "account" is really: which machine am I talking to, and how do I pair
-   another device. There is no cloud account and this menu says so. */
-function fillAccountMenu() {
-  const settings = state.settings || {};
-  const appName = (settings.app && settings.app.name) || 'Desk';
-  const initial = appName.slice(0, 1).toUpperCase();
-  $('am-name').textContent = appName;
-  $('am-avatar').textContent = initial;
-  // mirror it into the bottom-left chip in the sidebar
-  if ($('side-account-name')) $('side-account-name').textContent = appName;
-  if ($('side-avatar')) $('side-avatar').textContent = initial;
-  // Both chips name the machine this window is showing.
-  syncMachineBranding();
-}
-
 /* ---------------------------------------------------------------------
    resizable chrome: sidebar (left) and work panel (right).
    Each divider drags its own CSS variable; widths survive a reload.
@@ -6598,9 +6603,6 @@ function syncMachineBranding() {
   if ($('machine-sub')) {
     $('machine-sub').innerHTML = `<i class="machine-dot"></i>${escapeHtml(local ? '这台电脑' : [os, location.hostname].filter(Boolean).join(' · '))}`;
   }
-  const sub = local ? '本机' : `远程 · ${name}`;
-  if ($('side-account-sub')) $('side-account-sub').textContent = sub;
-  if ($('am-sub')) $('am-sub').textContent = sub;
   if ($('about-origin')) $('about-origin').textContent = location.origin;
   if ($('timezone-pill')) $('timezone-pill').textContent = timezoneLabel(effectiveTimezone());
   if ($('composer-hint')) {
@@ -7175,20 +7177,6 @@ function wireChrome() {
       openPanel('activity');
     }
   });
-  $('account-btn').addEventListener('click', (event) => {    event.stopPropagation();
-    const menu = $('account-menu');
-    const willOpen = menu.hidden;
-    menu.hidden = !willOpen;
-    if (willOpen) fillAccountMenu();
-  });
-  document.addEventListener('click', (event) => {
-    const menu = $('account-menu');
-    if (!menu || menu.hidden) return;
-    if (menu.contains(event.target) || event.target.closest('#account-btn')) return;
-    menu.hidden = true;
-  });
-  $('am-settings').addEventListener('click', () => { $('account-menu').hidden = true; openSettings(); });
-  $('am-pair').addEventListener('click', () => { $('account-menu').hidden = true; openSettings('sec-pair'); });
   $('pc-refresh').addEventListener('click', () => {
     if ($('pc-vnc-wrap')?.querySelector('iframe')) {
       $('pc-vnc-wrap').innerHTML = '';
