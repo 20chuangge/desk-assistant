@@ -62,6 +62,7 @@ import * as settingsModule from './settings.mjs';
 import { publicProviderCatalogue } from './providers.mjs';
 import { configure as configureDesktops, desktopInfo, desktopSupport, ensureDesktop, listDesktops, stopDesktop } from './desktops.mjs';
 import { createProvisioner } from './remote.mjs';
+import { bridgeWebSocket } from './wsbridge.mjs';
 import {
   evaluateAuth,
   isAuthExemptPath,
@@ -131,7 +132,14 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
   // Late-bound references: the routine runner needs the runtime, the
   // bot_message tool needs the runtime, and the registry is needed to build it.
   const refs = { runtime: null, routines: null, app: null };
-  const provisioner = createProvisioner();
+  // A machine this one sets up gets this one's model, so it works at once.
+  const provisioner = createProvisioner({
+    modelToShare: () => {
+      const s = state?.settings;
+      if (!s?.provider || s.provider === 'mock') return null;
+      return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: state.apiKey || '' };
+    },
+  });
 
   // Per-bot desktops read the VNC password the installer stored, if any.
   configureDesktops({ dataDir: P.dataDir });
@@ -346,7 +354,13 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     if (!match) return refuse(404, 'Not Found');
     if (!evaluateAuth(req, state.security).authorized) return refuse(401, 'Unauthorized');
     const info = desktopInfo(safeDecode(match[1]));
-    if (!info.running || !info.webPort) return refuse(404, 'Not Found');
+    if (!info.running) return refuse(404, 'Not Found');
+    // Windows: no websockify; the hub speaks WebSocket to the VNC server itself.
+    if (!info.webPort && info.vncPort) {
+      if (!bridgeWebSocket(req, socket, head, { port: info.vncPort })) refuse(400, 'Bad Request');
+      return;
+    }
+    if (!info.webPort) return refuse(404, 'Not Found');
     const upstream = net.connect(info.webPort, '127.0.0.1', () => {
       // Replay the client's handshake to websockify; it answers the upgrade.
       const lines = ['GET / HTTP/1.1'];

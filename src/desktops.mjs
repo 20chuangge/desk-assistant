@@ -42,8 +42,48 @@ function hasBinary(bin) {
   }
 }
 
+/*
+ * Windows: one desktop, the machine's console (login screen or the signed-in
+ * session), served by the TightVNC service that hub/setup-windows.ps1 installs
+ * on 127.0.0.1 only. Every bot shares it. The hub bridges WebSocket to it
+ * itself (no websockify on Windows). Its presence is probed in the background
+ * because desktopSupport() is synchronous.
+ */
+const WINDOWS_VNC_PORT = Number(process.env.DESK_VNC_PORT) || 5900;
+let windowsVnc = { up: false, checkedAt: 0 };
+
+function probeWindowsVnc() {
+  portOpen(WINDOWS_VNC_PORT).then((up) => { windowsVnc = { up, checkedAt: Date.now() }; });
+}
+if (process.platform === 'win32') {
+  probeWindowsVnc();
+  setInterval(probeWindowsVnc, 15000).unref();
+}
+
+function windowsDesktop(botId) {
+  return {
+    botId,
+    display: 'console',
+    shared: true,
+    vncPort: WINDOWS_VNC_PORT,
+    webPort: null,
+    running: windowsVnc.up,
+    url: windowsVnc.up ? viewerUrl(botId) : null,
+  };
+}
+
+/** Same-origin noVNC page, connecting back through the hub's relay. */
+function viewerUrl(botId) {
+  return `/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=${encodeURIComponent(`api/bots/${encodeURIComponent(botId)}/desktop/ws`)}`;
+}
+
 /** Whether per-bot desktops can work on this machine at all. */
 export function desktopSupport() {
+  if (process.platform === 'win32') {
+    return windowsVnc.up
+      ? { available: true, shared: true, reason: '' }
+      : { available: false, reason: 'no desktop server on this Windows machine (TightVNC, installed by setup-windows.ps1)' };
+  }
   // Escape hatch: per-bot desktops spawn X/DBus/session managers inside the hub
   // process, which is fine on some hosts and fatal on others. DESK_PER_BOT_DESKTOPS=0
   // falls back to the machine's single desktop while that is investigated.
@@ -149,6 +189,12 @@ function displayReady(display) {
  * Idempotent: calling it repeatedly is how the UI polls.
  */
 export async function ensureDesktop(botId) {
+  if (process.platform === 'win32') {
+    if (!botId) throw new Error('botId is required');
+    if (!windowsVnc.up) { probeWindowsVnc(); windowsVnc.up = await portOpen(WINDOWS_VNC_PORT); }
+    if (!windowsVnc.up) throw new Error(desktopSupport().reason);
+    return { ...windowsDesktop(botId), started: false };
+  }
   const support = desktopSupport();
   if (!support.available) throw new Error(support.reason);
   if (!botId) throw new Error('botId is required');
@@ -260,13 +306,14 @@ function publicInfo(botId, entry) {
     startedAt: entry.startedAt,
     // Same-origin viewer (the hub serves noVNC) that connects back through
     // the hub's authenticated relay; relative so it works from any address.
-    url: `/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=${encodeURIComponent(`api/bots/${encodeURIComponent(botId)}/desktop/ws`)}`,
+    url: viewerUrl(botId),
   };
 }
 
 
 /** Info for a bot's desktop without starting one. */
 export function desktopInfo(botId) {
+  if (process.platform === 'win32') return windowsDesktop(botId);
   const entry = desktops.get(botId);
   if (!entry) return { botId, running: false, display: null, url: null };
   return publicInfo(botId, entry);

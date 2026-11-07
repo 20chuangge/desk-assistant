@@ -2443,6 +2443,9 @@
     background: url("icons/icon-64.png") center / cover no-repeat;
     box-shadow: none; border-radius: 7px;
   }
+
+  /* the empty chat shows who you are talking to */
+  .empty-avatar { width: 54px; height: 54px; margin-bottom: 18px; border-radius: 14px; }
 </style>
 </head>
 <body>
@@ -2687,6 +2690,12 @@
             <button class="btn tiny danger" id="set-clear-key" type="button">清除已保存的密钥</button>
           </div>
         </form>
+        <div class="model-share" id="model-share" hidden>
+          <div class="dsec-head" style="font-size:13px;margin:22px 0 6px">所有机器共用一个模型</div>
+          <div class="row-note">新添加的机器会自动用上本机的模型。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。</div>
+          <button class="btn" id="model-sync" type="button" style="margin-top:10px">同步到所有机器</button>
+          <div class="row-note" id="model-sync-note" hidden></div>
+        </div>
       </section>
 
       <section class="dsec" id="sec-run">
@@ -4798,9 +4807,24 @@ function choiceButton(key, title, desc, onPick) {
   return btn;
 }
 
+/** The empty chat's mark: the bot you are talking to, else the app icon. */
+function emptyMark() {
+  const bot = botById(state.botId);
+  if (bot) {
+    const av = avatarNode(bot, 54, 'empty-avatar');
+    av.setAttribute('aria-hidden', 'true');
+    return av;
+  }
+  const img = document.createElement('img');
+  img.className = 'empty-avatar';
+  img.src = 'icons/icon-128.png';
+  img.alt = '';
+  return img;
+}
+
 function onboardingCard() {
   const wrap = el('div', 'empty');
-  wrap.appendChild(el('div', 'empty-mark', 'D'));
+  wrap.appendChild(emptyMark());
   wrap.appendChild(el('h2', null, '先接入一个模型'));
   wrap.appendChild(el('p', null, '现在用的是内置演示，回答由脚本生成，不会真的理解你的话。接入模型后它才开始正经干活。'));
 
@@ -4823,16 +4847,19 @@ function welcomeCard() {
   const pad = padName(name);
   const intro = bot && !bot.primary && bot.role
     ? `我是${pad}${name}，${bot.role}`
-    : `我是${pad}${name}，负责协调这台电脑上的助手`;
-  wrap.appendChild(el('div', 'empty-mark', 'D'));
+    : `我是${pad}${name}，告诉我要做什么，我来把它办完`;
+  wrap.appendChild(emptyMark());
   wrap.appendChild(el('h2', null, '今天想让我做什么？'));
-  wrap.appendChild(el('p', null, `${intro}。要动文件或系统的操作，我会先问过你。`));
+  // This computer asks before changing things; a remote machine is the bots' own.
+  wrap.appendChild(el('p', null, onLocalMachine()
+    ? `${intro}。要动文件或系统的操作，我会先问过你。`
+    : `${intro}。这台机器交给我了，我会自己把事情做完。`));
 
   const examples = [
-    ['A', '看看工作区', '列出文件，按类型整理一份清单', '看看工作区里有哪些文件，按类型整理一份清单，写清楚每个文件是做什么的。'],
-    ['B', '写一份笔记', '在工作区新建一个 markdown 文件', '在工作区里新建一份笔记，标题是「今天的想法」，先写上三条占位内容。'],
+    ['A', '看看这台电脑', '系统、磁盘、正在跑的程序', '看看这台电脑的系统版本、磁盘剩余空间和占用最多的几个程序，整理成一份简短的报告。'],
+    ['B', '打开一个网页', '读完告诉我要点', '打开 https://news.ycombinator.com ，把首页前五条标题和链接整理给我。'],
     ['C', '记住我的习惯', '比如默认用公制单位', '记住：我习惯用公制单位，温度用摄氏度，距离用公里。'],
-    ['D', '交给研究员', '让同事总结一份文档', '交给研究员：总结一下工作区里的 welcome.md，用三句话说明要点。'],
+    ['D', '安排一个定时任务', '比如每天早上的简报', '每天早上 9 点给我一份简报：这台电脑的磁盘和运行状态，有异常就标出来。'],
   ];
   const choices = el('div', 'choice-list');
   for (const [key, title, desc, prompt] of examples) {
@@ -6495,7 +6522,41 @@ function setSettingsNav(sectionId) {
   if (scroller) scroller.scrollTop = 0;
 }
 
+/** One model for every machine (desktop app only: it holds the pairings). */
+async function syncModelToMachines() {
+  const btn = $('model-sync');
+  const note = $('model-sync-note');
+  btn.disabled = true;
+  btn.textContent = '同步中…';
+  try {
+    const res = await window.desk.syncModel();
+    note.hidden = false;
+    if (!res?.ok) {
+      note.textContent = res?.error || '同步失败';
+      return;
+    }
+    if (!res.results.length) {
+      note.textContent = '还没有别的机器。';
+      return;
+    }
+    const done = res.results.filter((r) => r.ok).map((r) => r.name);
+    const failed = res.results.filter((r) => !r.ok).map((r) => `${r.name}（${r.error}）`);
+    note.textContent = [
+      done.length ? `已同步 ${res.model} 到：${done.join('、')}` : '',
+      failed.length ? `没同步上：${failed.join('、')}` : '',
+    ].filter(Boolean).join('；');
+    toast(failed.length ? '有机器没同步上' : '模型已同步到所有机器', Boolean(failed.length));
+  } catch (err) {
+    note.hidden = false;
+    note.textContent = `同步失败：${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '同步到所有机器';
+  }
+}
+
 function openSettings(section) {
+  if ($('model-share')) $('model-share').hidden = !window.desk?.syncModel;
   renderMachinesList();
   loadSkills();
   loadMemory();
@@ -6891,6 +6952,7 @@ function syncMachineBranding() {
   const host = state.computer?.host;
   const os = host ? (host.platform === 'win32' ? 'Windows' : host.platform === 'linux' ? 'Linux' : host.platform) : '';
   if ($('machine-name')) $('machine-name').textContent = name;
+  if ($('pc-title')) $('pc-title').textContent = `${name}的屏幕`;
   if ($('machine-sub')) {
     $('machine-sub').innerHTML = `<i class="machine-dot"></i>${escapeHtml(local ? '这台电脑' : [os, location.hostname].filter(Boolean).join(' · '))}`;
   }
@@ -7684,6 +7746,7 @@ function wireChrome() {
   $('rt-save').addEventListener('click', createRoutine);
   $('memory-refresh').addEventListener('click', () => { loadMemory(); loadActivity(); });
 
+  $('model-sync')?.addEventListener('click', syncModelToMachines);
   // settings form
   $('settings-form').addEventListener('submit', (event) => {
     event.preventDefault();

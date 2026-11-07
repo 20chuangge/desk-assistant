@@ -49,19 +49,20 @@ const setupLog = (hubOk) => [
 
 /** What setup-windows.ps1 prints. */
 const windowsLog = [
-  '[desk] 1/6 识别系统',
+  '[desk] 1/7 识别系统',
   '[desk] Microsoft Windows 11 专业版 10.0.26100（x64），程序目录 C:\\ProgramData\\Nightshift\\hub，运行账号 owner',
-  '[desk] 2/6 Node.js',
-  '[desk] 3/6 程序 → C:\\ProgramData\\Nightshift\\hub',
-  '[desk] 4/6 计划任务 NightshiftHub',
-  '[desk] 5/6 放行端口 4390，接电源时不睡眠',
-  '[desk] 6/6 启动并自检',
+  '[desk] 2/7 Node.js',
+  '[desk] 3/7 程序 → C:\\ProgramData\\Nightshift\\hub',
+  '[desk] 4/7 计划任务 NightshiftHub',
+  '[desk] 5/7 桌面：TightVNC（只听本机，经 Hub 配对后才能看和接管）',
+  '[desk] 6/7 放行端口 4390，接电源时不睡眠',
+  '[desk] 7/7 启动并自检',
   'DESK_OS=Microsoft Windows 11 专业版 10.0.26100',
   'DESK_HUB_URL=http://192.168.1.50:4390',
   'DESK_PAIR_CODE=87654321',
   'DESK_APP_DIR=C:\\ProgramData\\Nightshift\\hub',
   'DESK_HUB_OK=1',
-  'DESK_DESKTOP_OK=na',
+  'DESK_DESKTOP_OK=1',
 ].join('\n');
 
 let scenario = 'linux';
@@ -79,6 +80,7 @@ function respond(command) {
   if (command.includes('Get-ScheduledTask')) return [0, 'Running\n'];
   if (command.includes('/api/policy')) return [0, '{"mode":"remote","autoApproveAll":true}\n'];
   if (command.includes('Get-NetFirewallRule')) return [0, 'True\n'];
+  if (command.includes('-LocalPort 5900')) return [0, '127.0.0.1\n'];
   if (command === 'id -u') return [0, '1000\n'];
   if (command === "sudo -S -p '' -v") return [0, ''];
   if (command.includes('bash /tmp/desk-setup.sh')) return [0, `${setupLog(scenario !== 'broken')}\n`];

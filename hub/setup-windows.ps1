@@ -11,12 +11,13 @@
 #    2. Node.js：官方 zip 装进程序目录，不依赖系统里有没有 Node
 #    3. 程序：只替换代码；config/、skills/ 只补缺，已有的 Bot 和设置不动
 #    4. 计划任务 NightshiftHub：开机就在后台运行（不用登录），挂了自动拉起
-#    5. 放行防火墙端口；接电源时不睡眠（闲置电脑要一直能干活）
-#    6. 启动并自检
+#    5. 桌面：TightVNC 服务，只听 127.0.0.1，经 Hub 配对后才能看和接管
+#    6. 放行防火墙端口；接电源时不睡眠（闲置电脑要一直能干活）
+#    7. 启动并自检
 #  重跑是安全的。
 #
 #  最后几行给 src/remote.mjs 解析（和 setup-linux.sh 相同）：
-#      DESK_OS=… DESK_HUB_URL=… DESK_PAIR_CODE=… DESK_HUB_OK=1 DESK_DESKTOP_OK=na
+#      DESK_OS=… DESK_HUB_URL=… DESK_PAIR_CODE=… DESK_HUB_OK=1 DESK_DESKTOP_OK=1
 # =============================================================================
 param(
   [int]$Port = 4390,
@@ -41,7 +42,7 @@ trap { Write-Output "[desk] 出错：$($_.Exception.Message)（第 $($_.Invocati
 $TaskName = 'NightshiftHub'
 
 # -----------------------------------------------------------------------------
-Say '1/6 识别系统'
+Say '1/7 识别系统'
 $os = Get-CimInstance Win32_OperatingSystem
 $osName = "$($os.Caption) $($os.Version)".Trim()
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) { 'AMD64' { 'x64' } 'ARM64' { 'arm64' } default { '' } }
@@ -60,7 +61,7 @@ Say "$osName（$arch），程序目录 $AppDir，运行账号 $env:USERNAME"
 New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
 
 # -----------------------------------------------------------------------------
-Say '2/6 Node.js'
+Say '2/7 Node.js'
 function NodeOk([string]$exe) {
   if (-not $exe -or -not (Test-Path $exe)) { return $false }
   # "node -v" -> v22.23.4. (Passing JS with quotes via -p breaks: PowerShell 5.1
@@ -99,7 +100,7 @@ if (-not (NodeOk $nodeExe)) { Fail 'Node.js 安装失败（下载不到官方二
 Say "Node $(& $nodeExe -v)：$nodeExe"
 
 # -----------------------------------------------------------------------------
-Say "3/6 程序 → $AppDir"
+Say "3/7 程序 → $AppDir"
 $stage = Join-Path $env:TEMP "desk-stage-$PID"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 if ($Pkg) {
@@ -182,7 +183,7 @@ if ($NoSystem) {
 }
 
 # -----------------------------------------------------------------------------
-Say "4/6 计划任务 $TaskName"
+Say "4/7 计划任务 $TaskName"
 # S4U: runs at startup without anyone logged in and without storing a
 # password. It has no desktop (session 0), so the bots' browser is headless.
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
@@ -197,14 +198,63 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
 # -----------------------------------------------------------------------------
-Say "5/6 放行端口 $Port，接电源时不睡眠"
+Say '5/7 桌面：TightVNC（只听本机，经 Hub 配对后才能看和接管）'
+# The machine's real screen (login screen when nobody is signed in) for the
+# live view and takeover. TightVNC runs as a service; it accepts loopback only
+# and has no VNC password, the hub's authenticated relay is the only way in.
+$desktopOk = 0
+try {
+  if (-not (Get-Service tvnserver -ErrorAction SilentlyContinue)) {
+    $msiUrl = 'https://www.tightvnc.com/download/2.8.90/tightvnc-2.8.90-gpl-setup-64bit.msi'
+    try {
+      $page = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 'https://www.tightvnc.com/download.php').Content
+      $m = [regex]::Match([string]$page, '/download/([0-9.]+)/tightvnc-[0-9.]+-gpl-setup-64bit\.msi')
+      if ($m.Success) { $msiUrl = "https://www.tightvnc.com$($m.Value)" }
+    } catch { }
+    $msi = Join-Path $env:TEMP 'desk-tightvnc.msi'
+    Say "下载 $(Split-Path -Leaf $msiUrl)"
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 $msiUrl -OutFile $msi
+    # No published checksum: require GlavSoft's valid Authenticode signature.
+    $sig = Get-AuthenticodeSignature $msi
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'GlavSoft') {
+      throw "安装包签名不对（$($sig.Status) $($sig.SignerCertificate.Subject)），不装"
+    }
+    $msiArgs = @('/i', "`"$msi`"", '/quiet', '/norestart', 'ADDLOCAL=Server', 'SERVER_REGISTER_AS_SERVICE=1',
+      'SERVER_ADD_FIREWALL_EXCEPTION=0', 'SET_USEVNCAUTHENTICATION=1', 'VALUE_OF_USEVNCAUTHENTICATION=0',
+      'SET_LOOPBACKONLY=1', 'VALUE_OF_LOOPBACKONLY=1', 'SET_ALLOWLOOPBACK=1', 'VALUE_OF_ALLOWLOOPBACK=1',
+      'SET_ACCEPTHTTPCONNECTIONS=1', 'VALUE_OF_ACCEPTHTTPCONNECTIONS=0')
+    $p = Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -PassThru
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec 退出码 $($p.ExitCode)" }
+    Remove-Item $msi -ErrorAction SilentlyContinue
+  }
+  # Enforce the safe settings on every run, whoever installed it.
+  $reg = 'HKLM:\SOFTWARE\TightVNC\Server'
+  if (Test-Path $reg) {
+    foreach ($kv in @(@('LoopbackOnly', 1), @('AllowLoopback', 1), @('UseVncAuthentication', 0),
+                      @('AcceptHttpConnections', 0), @('RfbPort', 5900), @('RemoveWallpaper', 0))) {
+      Set-ItemProperty -Path $reg -Name $kv[0] -Value $kv[1] -Type DWord
+    }
+  }
+  Set-Service tvnserver -StartupType Automatic
+  Restart-Service tvnserver -Force
+  for ($i = 0; $i -lt 15 -and -not $desktopOk; $i++) {
+    Start-Sleep -Seconds 1
+    $tcp = New-Object Net.Sockets.TcpClient
+    try { $tcp.Connect('127.0.0.1', 5900); $desktopOk = 1 } catch { } finally { $tcp.Close() }
+  }
+  if (-not $desktopOk) { Warn 'TightVNC 装好了但 5900 端口没起来，实时画面暂时看不到' }
+} catch {
+  Warn "桌面没配好：$($_.Exception.Message)；Hub 本身不受影响"
+}
+
+Say "6/7 放行端口 $Port，接电源时不睡眠"
 Get-NetFirewallRule -DisplayName 'Nightshift Hub' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName 'Nightshift Hub' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Any | Out-Null
 & powercfg.exe /change standby-timeout-ac 0 | Out-Null
 & powercfg.exe /change hibernate-timeout-ac 0 | Out-Null
 
 # -----------------------------------------------------------------------------
-Say '6/6 启动并自检'
+Say '7/7 启动并自检'
 Start-ScheduledTask -TaskName $TaskName
 $code = ''
 for ($i = 0; $i -lt 40 -and -not $code; $i++) {
@@ -236,5 +286,5 @@ Write-Output "DESK_HUB_URL=http://${ip}:$Port"
 Write-Output "DESK_PAIR_CODE=$(if ($code) { $code } else { 'unknown' })"
 Write-Output "DESK_APP_DIR=$AppDir"
 Write-Output "DESK_HUB_OK=$hubOk"
-# Per-bot desktops are Linux-only for now; on Windows the bots browse headless.
-Write-Output 'DESK_DESKTOP_OK=na'
+# One shared desktop on Windows (the console via TightVNC); bots browse headless.
+Write-Output "DESK_DESKTOP_OK=$desktopOk"

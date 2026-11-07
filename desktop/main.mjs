@@ -11,7 +11,7 @@
  *   resources/server/config/*   <- seed config, copied to userData on first run
  *   %APPDATA%/Desk/             <- ASSIST_HOME: config, skills, public, workspace, data
  */
-import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, ipcMain, session } from 'electron';
+import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, ipcMain, session, net } from 'electron';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -586,6 +586,42 @@ ipcMain.handle('desk:add-machine', async (_event, { url, name, pairCode } = {}) 
   rememberMachine(target, { name: String(name || '').trim().slice(0, 40) || undefined, addedAt: new Date().toISOString() });
   refreshChrome();
   return { ok: true, url: target, paired };
+});
+
+/*
+ * One model for every machine: copy this computer's model settings (and key)
+ * to each remote machine. Runs here, not in the page, because the page can
+ * neither read the key nor talk to other machines; net.fetch carries the
+ * pairing cookies this app already holds for each of them.
+ */
+ipcMain.handle('desk:sync-model', async () => {
+  let model;
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(HOME, 'config', 'settings.json'), 'utf8'));
+    let apiKey = '';
+    try { apiKey = String(JSON.parse(fs.readFileSync(path.join(HOME, 'data', 'secrets.json'), 'utf8')).apiKey || ''); } catch { /* no key */ }
+    model = { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey };
+  } catch (err) {
+    return { ok: false, error: L(`读不到这台电脑的模型设置：${err.message}`, `Can't read this computer's model settings: ${err.message}`) };
+  }
+  if (!model.provider || model.provider === 'mock') {
+    return { ok: false, error: L('这台电脑还没配置真实模型，先在本机的「设置 → 模型」里配好。', 'This computer has no real model yet; set one up under Settings → Model on this computer first.') };
+  }
+  const results = [];
+  for (const machine of readMachines()) {
+    try {
+      const res = await net.fetch(`${machine.url}/api/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(model),
+        signal: AbortSignal.timeout(8000),
+      });
+      results.push({ name: machine.name, ok: res.ok, error: res.ok ? '' : (res.status === 401 ? L('未配对', 'not paired') : `HTTP ${res.status}`) });
+    } catch (err) {
+      results.push({ name: machine.name, ok: false, error: L('连不上', 'unreachable') });
+    }
+  }
+  return { ok: true, model: `${model.provider} · ${model.model}`, results };
 });
 
 ipcMain.handle('desk:rename-machine', (_event, { url, name } = {}) => {

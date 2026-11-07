@@ -120,6 +120,7 @@ const POSTFLIGHT_WINDOWS = {
   health: ps(`(Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:${port}/api/health).Content`),
   policy: ps(`(Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:${port}/api/policy).Content`),
   firewall: ps("(Get-NetFirewallRule -DisplayName 'Nightshift Hub').Enabled"),
+  vnc: ps('(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue).LocalAddress'),
 };
 
 let client;
@@ -169,6 +170,7 @@ try {
       ['拿到了配对码', Boolean(job.pairCode)],
       ['按远程机器运行（自主模式）', /"mode"\s*:\s*"remote"/.test(pf.policy.output)],
       ['防火墙已放行端口', /\bTrue\b/.test(pf.firewall.output)],
+      ['桌面服务（TightVNC）只听本机 127.0.0.1', /127\.0\.0\.1/.test(pf.vnc.output) && !/0\.0\.0\.0/.test(pf.vnc.output)],
     ];
     console.log('\n=== 结论检查 ===');
     for (const [name, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);

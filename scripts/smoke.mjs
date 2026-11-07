@@ -2656,6 +2656,34 @@ async function scenarioMachinesAndPolicy({ approvals, toolsMod }) {
     getRuntime: () => { throw new Error('machine tools never start turns'); },
     getRoutines: () => { throw new Error('machine tools never run routines'); },
   });
+  // Windows has no websockify: the hub's own WebSocket <-> VNC bridge.
+  {
+    const net = await import('node:net');
+    const { bridgeWebSocket } = await import('../src/wsbridge.mjs');
+    const vnc = net.createServer((s) => { s.write('RFB 003.008\n'); s.on('data', (d) => s.write(d)); s.on('error', () => {}); });
+    await new Promise((r) => vnc.listen(0, '127.0.0.1', r));
+    const relay = http.createServer();
+    relay.on('upgrade', (req, socket, head) => bridgeWebSocket(req, socket, head, { port: vnc.address().port }));
+    await new Promise((r) => relay.listen(0, '127.0.0.1', r));
+    const ws = new WebSocket(`ws://127.0.0.1:${relay.address().port}/x`, ['binary']);
+    ws.binaryType = 'arraybuffer';
+    const got = [];
+    ws.onmessage = (e) => got.push(Buffer.from(e.data));
+    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('ws error')); });
+    await sleep(200);
+    check('ws bridge: the VNC banner reaches the viewer', Buffer.concat(got).toString() === 'RFB 003.008\n' && ws.protocol === 'binary');
+    got.length = 0;
+    const big = Buffer.alloc(70_000, 3); // > 64 KB: the 8-byte length form
+    ws.send(Buffer.from('hi'));
+    ws.send(big);
+    await sleep(500);
+    const echo = Buffer.concat(got);
+    check('ws bridge: masked client frames of any size arrive intact', echo.length === 2 + big.length && echo.subarray(0, 2).toString() === 'hi' && echo.subarray(2).every((b) => b === 3), `${echo.length} bytes`);
+    ws.close();
+    relay.close();
+    vnc.close();
+  }
+
   // Bot desktops are reachable only through the hub's authenticated relay.
   {
     const desktopsSrc = await fsp.readFile(new URL('../src/desktops.mjs', import.meta.url), 'utf8');

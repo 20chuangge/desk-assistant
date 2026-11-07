@@ -221,7 +221,32 @@ function execStream(client, command, { stdin = '', onLine = () => {}, timeoutMs 
 // provisioning jobs
 // ---------------------------------------------------------------------------
 
-export function createProvisioner() {
+/**
+ * Give a freshly installed hub the same model as the machine that set it up,
+ * so a new machine works the moment it is added. Pairs with the install's
+ * code, then PUTs the settings; the key travels once, over the LAN, to the
+ * hub that will use it.
+ */
+async function shareModel(hubUrl, pairCode, model) {
+  const pair = await fetch(`${hubUrl}/api/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: pairCode }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!pair.ok) throw new Error(`pair HTTP ${pair.status}`);
+  const cookie = (pair.headers.get('set-cookie') || '').split(';')[0];
+  const res = await fetch(`${hubUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', cookie },
+    body: JSON.stringify(model),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`settings HTTP ${res.status}`);
+}
+
+/** modelToShare: () => {provider, baseUrl, model, apiKey} | null */
+export function createProvisioner({ modelToShare = () => null } = {}) {
   /** @type {Map<string, object>} */
   const jobs = new Map();
 
@@ -236,6 +261,7 @@ export function createProvisioner() {
     hubPort: job.hubPort,
     hubUrl: job.hubUrl || '',
     pairCode: job.pairCode || '',
+    modelShared: Boolean(job.modelShared),
     startedAt: job.startedAt,
     finishedAt: job.finishedAt || null,
     log: job.log.slice(-24),
@@ -378,6 +404,16 @@ export function createProvisioner() {
       for (let attempt = 0; attempt < 10 && !reachable; attempt += 1) {
         reachable = (await probeTcp(host, hubPort, 1500)).reachable;
         if (!reachable) await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      const model = reachable ? modelToShare() : null;
+      if (model) {
+        setProgress(job, '把模型设置同步过去…');
+        try {
+          await shareModel(job.hubUrl, job.pairCode, model);
+          job.modelShared = true;
+        } catch (err) {
+          job.warning = job.warning || `装好了，但模型设置没同步过去（${err.message}）；切过去后在「设置 → 模型」里填一下。`;
+        }
       }
       if (!reachable) {
         job.state = 'warning';
