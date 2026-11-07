@@ -1,0 +1,2 @@
+# Shell scripts run on Linux targets: never let a Windows checkout add CR.
+*.sh text eol=lf
