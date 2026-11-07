@@ -47,6 +47,23 @@ const setupLog = (hubOk) => [
   'DESK_DESKTOP_OK=1',
 ].join('\n');
 
+/** What setup-windows.ps1 prints. */
+const windowsLog = [
+  '[desk] 1/6 识别系统',
+  '[desk] Microsoft Windows 11 专业版 10.0.26100（x64），程序目录 C:\\ProgramData\\Nightshift\\hub，运行账号 owner',
+  '[desk] 2/6 Node.js',
+  '[desk] 3/6 程序 → C:\\ProgramData\\Nightshift\\hub',
+  '[desk] 4/6 计划任务 NightshiftHub',
+  '[desk] 5/6 放行端口 4390，接电源时不睡眠',
+  '[desk] 6/6 启动并自检',
+  'DESK_OS=Microsoft Windows 11 专业版 10.0.26100',
+  'DESK_HUB_URL=http://192.168.1.50:4390',
+  'DESK_PAIR_CODE=87654321',
+  'DESK_APP_DIR=C:\\ProgramData\\Nightshift\\hub',
+  'DESK_HUB_OK=1',
+  'DESK_DESKTOP_OK=na',
+].join('\n');
+
 let scenario = 'linux';
 const seen = [];
 const uploads = [];
@@ -54,8 +71,14 @@ const uploads = [];
 /** -> [exitCode, output] */
 function respond(command) {
   seen.push(command.split('\n')[0].slice(0, 120));
-  if (command === 'uname -s') return scenario === 'windows' ? [127, "'uname' is not recognized\n"] : [0, 'Linux\n'];
-  if (command === 'ver') return [0, 'Microsoft Windows [Version 10.0.26100.1]\n'];
+  const windows = scenario === 'windows';
+  if (command === 'uname -s') return windows || scenario === 'alien' ? [127, "'uname' is not recognized\n"] : [0, 'Linux\n'];
+  if (command === 'ver') return windows ? [0, 'Microsoft Windows [Version 10.0.26100.1]\n'] : [127, ''];
+  if (command.includes('OSVersion.VersionString')) return [127, ''];
+  if (command.includes('-File desk-setup.ps1')) return [0, `${windowsLog}\n`];
+  if (command.includes('Get-ScheduledTask')) return [0, 'Running\n'];
+  if (command.includes('/api/policy')) return [0, '{"mode":"remote","autoApproveAll":true}\n'];
+  if (command.includes('Get-NetFirewallRule')) return [0, 'True\n'];
   if (command === 'id -u') return [0, '1000\n'];
   if (command === "sudo -S -p '' -v") return [0, ''];
   if (command.includes('bash /tmp/desk-setup.sh')) return [0, `${setupLog(scenario !== 'broken')}\n`];
@@ -91,12 +114,15 @@ const ssh = new Server({ hostKeys: [privateKey] }, (client) => {
         sftp.on('OPEN', (reqid, filename) => {
           const handle = Buffer.alloc(4);
           handle.writeUInt32BE(next++, 0);
-          files.set(handle.toString('hex'), { filename, bytes: 0 });
+          files.set(handle.toString('hex'), { filename, bytes: 0, head: null });
           sftp.handle(reqid, handle);
         });
         sftp.on('WRITE', (reqid, handle, _offset, data) => {
           const file = files.get(handle.toString('hex'));
-          if (file) file.bytes += data.length;
+          if (file) {
+            if (file.head === null) file.head = Buffer.from(data.subarray(0, 3));
+            file.bytes += data.length;
+          }
           sftp.status(reqid, STATUS_CODE.OK);
         });
         sftp.on('CLOSE', (reqid, handle) => {
@@ -146,6 +172,7 @@ async function runVerify(name) {
 const linux = await runVerify('linux');
 const windows = await runVerify('windows');
 const broken = await runVerify('broken');
+const alien = await runVerify('alien');
 
 const checks = [
   ['Linux：验收以 PASS 退出', linux.code === 0 && /结论: PASS/.test(linux.output)],
@@ -154,8 +181,13 @@ const checks = [
   ['Linux：经 SFTP 上传了程序包和安装脚本', ['/tmp/desk-hub.tar.gz', '/tmp/desk-setup.sh'].every((f) => linux.uploads.some((u) => u.filename === f && u.bytes > 0))],
   ['Linux：执行的是 setup-linux.sh（带端口和程序包）', linux.seen.some((c) => /bash \/tmp\/desk-setup\.sh --port '\d+' --pkg \/tmp\/desk-hub\.tar\.gz/.test(c))],
   ['Linux：地址用 SSH 连得到的那个，不用对方报的内网 IP', /hubUrl: http:\/\/127\.0\.0\.1:/.test(linux.output)],
-  ['Windows：识别为 UNSUPPORTED', windows.code === 3 && /结论: UNSUPPORTED/.test(windows.output)],
-  ['Windows：没有上传也没有执行任何东西', windows.uploads.length === 0 && !windows.seen.some((c) => c.includes('desk-setup.sh'))],
+  ['Windows：验收以 PASS 退出', windows.code === 0 && /结论: PASS/.test(windows.output)],
+  ['Windows：不走 sudo', !windows.seen.some((c) => c.includes('sudo -S'))],
+  ['Windows：程序包和 ps1 传到账号主目录', ['desk-hub.tar.gz', 'desk-setup.ps1'].every((f) => windows.uploads.some((u) => u.filename === f && u.bytes > 0))],
+  ['Windows：ps1 带 UTF-8 BOM（PowerShell 5.1 才不会乱码）', windows.uploads.some((u) => u.filename === 'desk-setup.ps1' && u.head && u.head.equals(Buffer.from([0xef, 0xbb, 0xbf])))],
+  ['Windows：用 Windows PowerShell 执行，带端口和程序包', windows.seen.some((c) => /^powershell -NoProfile -ExecutionPolicy Bypass -File desk-setup\.ps1 -Port \d+ -Pkg desk-hub\.tar\.gz/.test(c))],
+  ['Windows：检查了计划任务、防火墙和远程模式', ['Get-ScheduledTask', 'Get-NetFirewallRule', '/api/policy'].every((k) => windows.seen.some((c) => c.includes(k)))],
+  ['既不是 Linux 也不是 Windows：UNSUPPORTED，什么都没传', alien.code === 3 && /结论: UNSUPPORTED/.test(alien.output) && alien.uploads.length === 0],
   ['Hub 没起来：判 FAIL，不误报成功', broken.code === 1 && /结论: FAIL/.test(broken.output)],
 ];
 

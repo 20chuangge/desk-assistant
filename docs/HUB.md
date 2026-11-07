@@ -19,7 +19,7 @@
 
 | 角色 | 装什么 | 怎么连 |
 |---|---|---|
-| **Hub**（闲置 PC / 云主机） | 推荐：Desk 客户端「添加机器」自动装；手动：`sudo bash hub/setup-linux.sh`（Linux）、`hub/start-hub.bat`（Windows）、Docker | 监听 `0.0.0.0:4390`，启动时打印局域网地址 + 8 位配对码 |
+| **Hub**（闲置 PC / 云主机） | 推荐：Desk 客户端「添加机器」自动装；手动：`sudo bash hub/setup-linux.sh`（Linux）、管理员 PowerShell 里 `powershell -ExecutionPolicy Bypass -File hub/setup-windows.ps1`（Windows：计划任务开机自启、防火墙放行、接电源不睡眠）、Docker | 监听 `0.0.0.0:4390`，启动时打印局域网地址 + 8 位配对码 |
 | **你的笔记本** | 安装包（`Desk-Setup-*.exe`） | 左上角机器切换器 → 添加机器（填 IP + SSH 账号），装好自动配对并加进列表 |
 | **手机** | 浏览器（或后面打的 APK） | 打开 Hub 地址 + 配对码；https 下可"添加到主屏幕" |
 

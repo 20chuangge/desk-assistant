@@ -7,11 +7,12 @@
  * the target beforehand, and the SSH password is held in memory for this one
  * job only - it is never persisted or logged.
  *
- * Linux (apt and dnf/yum families) is supported today; Windows is detected and
- * refused with a clear message until its setup script exists.
+ * Linux (apt and dnf/yum families) runs hub/setup-linux.sh with sudo; Windows
+ * (OpenSSH server, admin account) runs hub/setup-windows.ps1.
  */
 
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +35,10 @@ async function loadSsh2() {
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SETUP_SCRIPTS = { linux: path.join(HERE, '..', 'hub', 'setup-linux.sh') };
+const SETUP_SCRIPTS = {
+  linux: path.join(HERE, '..', 'hub', 'setup-linux.sh'),
+  windows: path.join(HERE, '..', 'hub', 'setup-windows.ps1'),
+};
 const JOB_TIMEOUT_MS = 20 * 60 * 1000;
 
 function remoteError(code, message) {
@@ -251,9 +255,44 @@ export function createProvisioner() {
     // Git for Windows / MSYS put a uname on PATH.
     if (probe.code === 0 && /mingw|msys|cygwin|windows/i.test(probe.output)) return 'windows';
     if (probe.code === 0 && probe.output.trim()) return 'unknown';
-    // Windows OpenSSH starts cmd.exe or PowerShell; both understand "ver".
+    // Windows OpenSSH starts cmd.exe ("ver") or PowerShell (no "ver"); ask
+    // powershell.exe directly, which answers from either.
     const win = await execStream(client, 'ver', { timeoutMs: 15000 }).catch(() => ({ code: 1, output: '' }));
-    return /windows/i.test(win.output) ? 'windows' : 'unknown';
+    if (/windows/i.test(win.output)) return 'windows';
+    const ps = await execStream(client, 'powershell -NoProfile -Command [Environment]::OSVersion.VersionString', { timeoutMs: 20000 })
+      .catch(() => ({ code: 1, output: '' }));
+    return /windows/i.test(ps.output) ? 'windows' : 'unknown';
+  }
+
+  /**
+   * Windows: upload into the account's home (SFTP starts there; cmd.exe and
+   * PowerShell sessions too), then run the script with Windows PowerShell.
+   * The script itself refuses a non-admin account.
+   */
+  async function installWindows(client, job, packed, hubPort) {
+    await uploadFile(client, packed.file, 'desk-hub.tar.gz');
+    // PowerShell 5.1 reads a BOM-less script as the ANSI code page, which
+    // garbles the Chinese progress text; ship it with a UTF-8 BOM.
+    const source = await fsp.readFile(SETUP_SCRIPTS.windows);
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const withBom = path.join(os.tmpdir(), `desk-setup-${process.pid}-${Date.now()}.ps1`);
+    await fsp.writeFile(withBom, source.subarray(0, 3).equals(bom) ? source : Buffer.concat([bom, source]));
+    try {
+      await uploadFile(client, withBom, 'desk-setup.ps1');
+    } finally {
+      fsp.rm(withBom, { force: true }).catch(() => {});
+    }
+    setProgress(job, '安装并启动（首次 2-5 分钟）…');
+    return execStream(
+      client,
+      `powershell -NoProfile -ExecutionPolicy Bypass -File desk-setup.ps1 -Port ${Number(hubPort)} -Pkg desk-hub.tar.gz`,
+      {
+        onLine: (line) => {
+          const text = line.trim();
+          if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+        },
+      },
+    );
   }
 
   async function run(job, { host, sshPort, username, password, hubPort }) {
@@ -264,46 +303,52 @@ export function createProvisioner() {
 
       setProgress(job, '识别系统…');
       job.os = await detectOs(client);
-      if (job.os === 'windows') {
-        throw remoteError('REMOTE_UNSUPPORTED_OS', '这是一台 Windows 机器。Windows 的自动配置还在做，目前只支持 Linux（Ubuntu/Debian/Rocky 等）。');
+      if (job.os !== 'linux' && job.os !== 'windows') {
+        throw remoteError('REMOTE_UNSUPPORTED_OS', '认不出这台机器的系统（不是 Linux 也不是 Windows），暂时没法自动配置。');
       }
-      if (job.os !== 'linux') {
-        throw remoteError('REMOTE_UNSUPPORTED_OS', '认不出这台机器的系统（不是 Linux），暂时没法自动配置。');
-      }
+      const windows = job.os === 'windows';
 
-      setProgress(job, '检查 sudo 权限…');
-      const identity = await execStream(client, 'id -u', { timeoutMs: 15000 });
-      const isRoot = identity.output.trim().split(/\s+/).pop() === '0';
       let sudoPrefix = '';
-      if (!isRoot) {
-        const check = await execStream(client, "sudo -S -p '' -v", { stdin: `${password}\n`, timeoutMs: 15000 });
-        if (check.code !== 0) {
-          throw remoteError('REMOTE_NO_SUDO', '这个 SSH 账号不能 sudo；请换一个管理员账号，或先给该账号 sudo 权限。');
+      let isRoot = false;
+      if (!windows) {
+        setProgress(job, '检查 sudo 权限…');
+        const identity = await execStream(client, 'id -u', { timeoutMs: 15000 });
+        isRoot = identity.output.trim().split(/\s+/).pop() === '0';
+        if (!isRoot) {
+          const check = await execStream(client, "sudo -S -p '' -v", { stdin: `${password}\n`, timeoutMs: 15000 });
+          if (check.code !== 0) {
+            throw remoteError('REMOTE_NO_SUDO', '这个 SSH 账号不能 sudo；请换一个管理员账号，或先给该账号 sudo 权限。');
+          }
+          sudoPrefix = "sudo -S -p '' ";
         }
-        sudoPrefix = "sudo -S -p '' ";
       }
 
       setProgress(job, '打包夜班程序…');
       const packed = await packApp();
       try {
         setProgress(job, `上传程序（${Math.max(1, Math.round(packed.bytes / 1024 / 1024))} MB）…`);
-        const remotePkg = '/tmp/desk-hub.tar.gz';
-        const remoteScript = '/tmp/desk-setup.sh';
-        await uploadFile(client, packed.file, remotePkg);
-        await uploadFile(client, SETUP_SCRIPTS[job.os], remoteScript);
+        let result;
+        if (windows) {
+          result = await installWindows(client, job, packed, hubPort);
+        } else {
+          const remotePkg = '/tmp/desk-hub.tar.gz';
+          const remoteScript = '/tmp/desk-setup.sh';
+          await uploadFile(client, packed.file, remotePkg);
+          await uploadFile(client, SETUP_SCRIPTS.linux, remoteScript);
 
-        setProgress(job, '安装并启动（首次 3-10 分钟）…');
-        const result = await execStream(
-          client,
-          `${sudoPrefix}bash ${remoteScript} --port ${shellQuote(String(hubPort))} --pkg ${remotePkg}`,
-          {
-            stdin: isRoot ? '' : `${password}\n`,
-            onLine: (line) => {
-              const text = line.trim();
-              if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+          setProgress(job, '安装并启动（首次 3-10 分钟）…');
+          result = await execStream(
+            client,
+            `${sudoPrefix}bash ${remoteScript} --port ${shellQuote(String(hubPort))} --pkg ${remotePkg}`,
+            {
+              stdin: isRoot ? '' : `${password}\n`,
+              onLine: (line) => {
+                const text = line.trim();
+                if (text && !/^DESK_/.test(text)) setProgress(job, text.slice(0, 300));
+              },
             },
-          },
-        );
+          );
+        }
         const value = (key) => new RegExp(`^${key}=(.*)$`, 'm').exec(result.output)?.[1]?.trim() || '';
         // The address the script sees may be NAT-internal (a cloud VM); the one
         // we just reached over SSH is the one this client can use.
@@ -316,7 +361,8 @@ export function createProvisioner() {
           const tail = said.slice(-4).join(' / ') || `exit ${result.code}`;
           throw remoteError('REMOTE_HUB_FAILED', `安装失败：${tail}`);
         }
-        if (value('DESK_DESKTOP_OK') !== '1') {
+        // "na": Windows has no per-bot desktops yet; its bots browse headless.
+        if (!['1', 'na'].includes(value('DESK_DESKTOP_OK'))) {
           job.warning = '装好了，但桌面相关的程序没装全，Bot 的屏幕会是黑的';
         }
       } finally {

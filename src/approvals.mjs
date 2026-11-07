@@ -69,6 +69,16 @@ export const REMOTE_DENY_PATTERNS = [
   '\\biptables\\b.*-P\\s+INPUT\\s+DROP',
   '\\b(passwd|userdel|deluser)\\b',
   '\\b:\\(\\)\\s*\\{',
+  // Windows hubs
+  '\\bformat(\\.com)?\\s+[a-z]:',
+  '\\b(Format-Volume|Clear-Disk|Initialize-Disk|Stop-Computer)\\b',
+  '\\bRemove-Item\\b.*\\s[a-z]:\\\\?(\\*)?(\\s|$)', // a whole drive
+  '\\b(rd|rmdir)\\s+/s\\b.*\\s[a-z]:\\\\?(\\s|$)',
+  '\\b(Stop-Service|Set-Service|sc(\\.exe)?\\s+(stop|config))\\b.*\\bsshd\\b',
+  '\\b(Disable|Unregister|Stop)-ScheduledTask\\b.*NightshiftHub',
+  '\\bnet\\s+user\\b.*\\/(delete|passwordreq)',
+  '\\bSet-LocalUser\\b.*-Password\\b',
+  '\\bnetsh\\s+advfirewall\\b.*\\bblock',
 ];
 
 /** 'remote' on a machine set up by hub/setup-linux.sh, 'local' otherwise. */

@@ -2686,6 +2686,11 @@ async function scenarioMachinesAndPolicy({ approvals, toolsMod }) {
     check('remote: wiping or cutting off the machine still asks',
       ['rm -rf /', 'sudo mkfs.ext4 /dev/sdb1', 'sudo shutdown -h now', 'sudo systemctl stop ssh', 'passwd ubuntu'].every((c) => decide(c, remote) === 'ask'));
     check('remote: autonomy can be switched off', approvals.effectivePolicy({ remoteAutonomy: false }).autonomous === false);
+    check('remote Windows: everyday admin work runs without asking',
+      ['winget install --id Git.Git -e', 'Restart-Service Spooler', 'Remove-Item -Recurse -Force C:\\Users\\me\\tmp'].every((c) => decide(c, remote) === 'auto'));
+    check('remote Windows: wiping or cutting off the machine still asks',
+      ['Format-Volume -DriveLetter D', 'format d: /q', 'Stop-Computer -Force', 'shutdown /s /t 0', 'Remove-Item -Recurse -Force C:\\',
+        'Stop-Service sshd', 'Unregister-ScheduledTask -TaskName NightshiftHub', 'net user owner /delete'].every((c) => decide(c, remote) === 'ask'));
     process.env.DESK_MACHINE_MODE = '';
     const local = approvals.effectivePolicy({});
     check('local: sudo still asks', local.mode === 'local' && decide('sudo apt-get install x', local) === 'ask');

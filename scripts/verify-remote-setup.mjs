@@ -113,6 +113,14 @@ const POSTFLIGHT = {
   desktopTools: 'for t in Xvfb x11vnc websockify xfce4-session gnome-session; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done',
   sudoers: 'ls /etc/sudoers.d/desk-hub 2>/dev/null || echo missing',
 };
+// Windows: works from cmd.exe or PowerShell as the OpenSSH default shell.
+const ps = (script) => `powershell -NoProfile -Command "${script}"`;
+const POSTFLIGHT_WINDOWS = {
+  task: ps('(Get-ScheduledTask -TaskName NightshiftHub).State'),
+  health: ps(`(Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:${port}/api/health).Content`),
+  policy: ps(`(Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:${port}/api/policy).Content`),
+  firewall: ps("(Get-NetFirewallRule -DisplayName 'Nightshift Hub').Enabled"),
+};
 
 let client;
 const report = { host: DESK_TARGET_HOST, hubPort: port, startedAt: new Date().toISOString() };
@@ -145,12 +153,28 @@ try {
   report.job = { state: job.state, message: job.message, os: job.os, hubUrl: job.hubUrl, paired: Boolean(job.pairCode), log: job.log };
   console.log(`  hubUrl: ${job.hubUrl || '-'}`);
 
-  if (job.state === 'error' && /Windows|认不出/.test(job.message)) {
+  if (job.state === 'error' && /认不出/.test(job.message)) {
     report.verdict = 'UNSUPPORTED';
     report.reason = job.message;
   } else if (job.state === 'error' || job.state === 'running') {
     report.verdict = 'FAIL';
     report.reason = job.state === 'running' ? '超时' : job.message;
+  } else if (/windows/i.test(job.os || '')) {
+    client = await connect();
+    report.postflight = await inspect(client, '验收后检查（Windows）', POSTFLIGHT_WINDOWS);
+    const pf = report.postflight;
+    const checks = [
+      ['计划任务 NightshiftHub 在运行', /\bRunning\b/.test(pf.task.output)],
+      ['本机 /api/health 应答', /"ok"\s*:\s*true/.test(pf.health.output)],
+      ['拿到了配对码', Boolean(job.pairCode)],
+      ['按远程机器运行（自主模式）', /"mode"\s*:\s*"remote"/.test(pf.policy.output)],
+      ['防火墙已放行端口', /\bTrue\b/.test(pf.firewall.output)],
+    ];
+    console.log('\n=== 结论检查 ===');
+    for (const [name, ok] of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);
+    report.checks = Object.fromEntries(checks);
+    report.verdict = checks.every(([, ok]) => ok) ? 'PASS' : 'FAIL';
+    if (job.state === 'warning') report.warning = job.message;
   } else {
     client = await connect();
     report.postflight = await inspect(client, '验收后检查', POSTFLIGHT);
