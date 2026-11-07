@@ -6732,7 +6732,7 @@ function currentViewerUrl() {
 
 function renderComputerPane() {
   syncMachineBranding();
-  if ($('pc-title')) $('pc-title').textContent = `${machineDisplayName()} 的屏幕`;
+  if ($('pc-title')) $('pc-title').textContent = `${machineDisplayName()}的屏幕`;
   if (!desktopTakeover()) {
     if ($('pc-screen')) $('pc-screen').style.display = '';
     refreshScreen();
