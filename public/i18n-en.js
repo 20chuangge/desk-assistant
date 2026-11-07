@@ -1,5 +1,5 @@
 /*
- * English for the Desk UI.
+ * English for the Nightshift (夜班) UI.
  *
  * Keys are the Chinese source text exactly as it appears in the UI (whitespace
  * collapsed). {0}, {1}… stand for the parts a template fills in, in order;
@@ -12,8 +12,10 @@
  */
 window.DESK_I18N_EN = {
   // --- shell -------------------------------------------------------------
-  "Desk · 个人助理": "Desk · Personal assistant",
+  "夜班 · 个人助理": "Nightshift · Personal assistant",
   "本机": "This computer",
+  "夜班": "Nightshift",
+  "夜班 Nightshift": "Nightshift",
   "这台电脑": "This computer",
   "新建助手": "New bot",
   "新建群组": "New group",
@@ -53,7 +55,7 @@ window.DESK_I18N_EN = {
   "外观": "Appearance",
   "手机配对": "Phone pairing",
   "关于": "About",
-  "接入一个真实模型，Desk 才能听懂你的话。不接入时用内置演示，回答是脚本写好的。": "Connect a real model so Desk can understand you. Without one it runs the built-in demo, with scripted replies.",
+  "接入一个真实模型，夜班才能听懂你的话。不接入时用内置演示，回答是脚本写好的。": "Connect a real model so Nightshift can understand you. Without one it runs the built-in demo, with scripted replies.",
   "服务商": "Provider",
   "演示模式（无需密钥）": "Demo mode (no key needed)",
   "OpenAI 兼容接口": "OpenAI-compatible API",
@@ -88,7 +90,7 @@ window.DESK_I18N_EN = {
   "复制": "Copy",
   "配对码": "Pairing code",
   "手机浏览器打开这个地址，输入配对码": "Open this address in your phone's browser and enter the pairing code",
-  "配对码只用于把手机接进这台电脑上的 Desk，不会上传到任何地方。": "The pairing code only connects your phone to Desk on this computer. It is never uploaded anywhere.",
+  "配对码只用于把手机接进这台电脑上的夜班，不会上传到任何地方。": "The pairing code only connects your phone to Nightshift on this computer. It is never uploaded anywhere.",
   "应用": "App",
   "版本": "Version",
   "服务": "Server",
@@ -105,7 +107,7 @@ window.DESK_I18N_EN = {
   "SSH 用户名": "SSH username",
   "SSH 端口": "SSH port",
   "SSH 密码": "SSH password",
-  "填完点「连接并自动配置」就行，剩下的都自动： 装依赖 → 部署 Desk → 配好每个 Bot 的桌面 → 自动配对并加进机器列表。 密码只用于这一次配置，不会保存。": "Fill these in and choose “Connect and set up”. The rest is automatic: install dependencies → deploy Desk → set up each bot's desktop → pair and add it to your machines. The password is used for this setup only and is never stored.",
+  "填完点「连接并自动配置」就行，剩下的都自动： 装依赖 → 部署夜班 → 配好每个 Bot 的桌面 → 自动配对并加进机器列表。 密码只用于这一次配置，不会保存。": "Fill these in and choose “Connect and set up”. The rest is automatic: install dependencies → deploy Nightshift → set up each bot's desktop → pair and add it to your machines. The password is used for this setup only and is never stored.",
   "准备中…": "Preparing…",
   "连接并自动配置": "Connect and set up",
   "确认删除": "Confirm delete",
@@ -124,11 +126,11 @@ window.DESK_I18N_EN = {
   "移除图片": "Remove image",
   "重置": "Reset",
   "图片会先压到 512px 再上传，并套用同样的形状遮罩。": "Images are scaled to 512px before upload and use the same shape mask.",
-  "连接你的 Desk": "Connect to your Desk",
-  "Desk 正在这台机器上运行。这台设备还没有获得授权——输入地址和配对码，连接一次就好。": "Desk is running on this machine. This device isn't authorised yet: enter the address and pairing code once.",
-  "Desk 地址": "Desk address",
+  "连接你的夜班": "Connect to your Nightshift",
+  "夜班正在这台机器上运行。这台设备还没有获得授权——输入地址和配对码，连接一次就好。": "Nightshift is running on this machine. This device isn't authorised yet: enter the address and pairing code once.",
+  "夜班地址": "Nightshift address",
   "连接": "Connect",
-  "配对码是电脑上 Desk 的「设置 → 配对」里的 8 位数字，只在这台设备上生效。": "The pairing code is the 8-digit number in Desk's Settings → Phone pairing on the computer. It applies to this device only.",
+  "配对码是电脑上夜班的「设置 → 配对」里的 8 位数字，只在这台设备上生效。": "The pairing code is the 8-digit number in Nightshift's Settings → Phone pairing on the computer. It applies to this device only.",
   "最小化": "Minimise",
   "最大化": "Maximise",
   "关闭": "Close",
@@ -318,7 +320,7 @@ window.DESK_I18N_EN = {
   "你的助理。说一句要做什么，它自己把事情办完。": "Your assistant. Say what you want done and it finishes the job.",
 
   // --- connection & pairing ----------------------------------------------
-  "无法连接 Desk 服务，网络可能断了。": "Can't reach the Desk server. The network may be down.",
+  "无法连接夜班服务，网络可能断了。": "Can't reach the Nightshift server. The network may be down.",
   "这台设备的授权已失效，请重新配对。": "This device is no longer authorised. Please pair again.",
   "已复制": "Copied",
   "复制失败，请长按选择文字": "Copy failed; long-press to select the text",
@@ -328,11 +330,11 @@ window.DESK_I18N_EN = {
   "这个地址打不开，检查一下是不是同一局域网。": "Can't open this address. Check you're on the same network.",
   "连接中…": "Connecting…",
   "配对成功，正在进入…": "Paired. Opening…",
-  "配对码不对，检查一下电脑上 Desk 的「设置 → 配对」。": "Wrong pairing code. Check Desk's Settings → Phone pairing on the computer.",
+  "配对码不对，检查一下电脑上夜班的「设置 → 配对」。": "Wrong pairing code. Check Nightshift's Settings → Phone pairing on the computer.",
   "试得太多次了，等一分钟再试。": "Too many attempts. Wait a minute and try again.",
   "服务端还没有配对接口（404）。如果你就在这台电脑上，可以直接刷新试试。": "The server has no pairing API (404). If you're on that computer, try reloading.",
   "配对失败，检查配对码是否过期。": "Pairing failed. Check whether the code has expired.",
-  "连不上 Desk": "Can't reach Desk",
+  "连不上夜班": "Can't reach Nightshift",
   "服务没有响应。": "The server isn't responding.",
   "重试": "Retry",
   "地址已复制": "Address copied",
@@ -398,7 +400,7 @@ window.DESK_I18N_EN = {
   "如果同名文件已经存在，里面的内容会被覆盖。": "If a file with this name exists, its contents are overwritten.",
   "删除文件": "Delete a file",
   "想删除一个文件或文件夹": "Wants to delete a file or folder",
-  "删掉之后，Desk 里没有撤销按钮。": "There's no undo in Desk once it's deleted.",
+  "删掉之后，夜班里没有撤销按钮。": "There's no undo in Nightshift once it's deleted.",
   "新建文件夹": "New folder",
   "想新建一个文件夹": "Wants to create a folder",
   "只会在工作区里加一个目录，不改动已有文件。": "Only adds a folder in the workspace; existing files are untouched.",
@@ -653,9 +655,11 @@ window.DESK_I18N_EN = {
   // --- machines -----------------------------------------------------------
   "在「{0}」上，助手会自己把事情做完": "On “{0}”, bots finish the job on their own",
   "切换失败": "Switch failed",
-  "在 Desk 客户端里才能切换机器": "Switch machines in the Desk app",
+  "地址格式不对": "That address doesn't look right",
+  "名字不能为空": "Name can't be empty",
+  "在夜班客户端里才能切换机器": "Switch machines in the Nightshift app",
   "添加机器…": "Add machine…",
-  "当前：{0}。在浏览器或手机里打开时只能用当前这台；添加和切换机器请在 Desk 客户端里操作。": "Current: {0}. In a browser or on a phone you use this machine only; add and switch machines in the Desk app.",
+  "当前：{0}。在浏览器或手机里打开时只能用当前这台；添加和切换机器请在夜班客户端里操作。": "Current: {0}. In a browser or on a phone you use this machine only; add and switch machines in the Nightshift app.",
   "当前": "Current",
   "切到这里": "Switch here",
   "改名": "Rename",
@@ -688,7 +692,7 @@ window.DESK_I18N_EN = {
   "正在切换…": "Switching…",
   "自动配置失败：{0}": "Setup failed: {0}",
   // server-side setup progress and errors (src/remote.mjs)
-  "这台机器上没有 ssh2 依赖，无法再远程配置别的机器；请在 Desk 客户端里操作。": "This machine lacks the ssh2 dependency and can't set up other machines; use the Desk app.",
+  "这台机器上没有 ssh2 依赖，无法再远程配置别的机器；请在夜班客户端里操作。": "This machine lacks the ssh2 dependency and can't set up other machines; use the Nightshift app.",
   "SSH 账号或密码不对，或者这个账号禁止密码登录。": "Wrong SSH username or password, or this account doesn't allow password login.",
   "连不上 SSH 端口。确认机器已开机、SSH 服务在跑、端口没有写错。": "Can't reach the SSH port. Check the machine is on, SSH is running and the port is right.",
   "解析不到这个地址，检查 IP 或主机名。": "Can't resolve this address. Check the IP or hostname.",
@@ -700,7 +704,7 @@ window.DESK_I18N_EN = {
   "认不出这台机器的系统（不是 Linux），暂时没法自动配置。": "Can't identify this machine's system (not Linux), so it can't be set up automatically yet.",
   "检查 sudo 权限…": "Checking sudo…",
   "这个 SSH 账号不能 sudo；请换一个管理员账号，或先给该账号 sudo 权限。": "This SSH account can't sudo. Use an admin account, or grant it sudo first.",
-  "打包 Desk 程序…": "Packing Desk…",
+  "打包夜班程序…": "Packing Nightshift…",
   "上传程序（{0} MB）…": "Uploading ({0} MB)…",
   "安装并启动（首次 3-10 分钟）…": "Installing and starting (3–10 minutes the first time)…",
   "安装失败：{0}": "Install failed: {0}",

@@ -13,7 +13,7 @@
     "smoke:remote-mock": "node scripts/smoke-remote-mock.mjs",
     "verify:remote": "node scripts/verify-remote-setup.mjs",
     "desktop": "electron desktop",
-    "desktop:icons": "node desktop/make-icons.mjs",
+    "desktop:icons": "npx --prefix desktop electron desktop/render-icons.cjs && node desktop/make-icons.mjs",
     "desktop:build": "npm --prefix desktop run build:win",
     "desktop:dir": "npm --prefix desktop run build:dir",
     "mobile:sync": "node mobile/scripts/sync-www.mjs && cd mobile && npx cap sync",

@@ -1,13 +1,13 @@
 {
   "name": "desk-desktop",
-  "productName": "Desk",
+  "productName": "Nightshift",
   "version": "1.0.0",
-  "description": "Desk - a personal AI assistant with its own computer",
+  "description": "Nightshift - AI bots that put your idle computers to work",
   "private": true,
   "main": "main.mjs",
   "type": "module",
   "author": {
-    "name": "Desk"
+    "name": "Nightshift"
   },
   "license": "MIT",
   "scripts": {

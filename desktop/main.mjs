@@ -1,5 +1,5 @@
 /**
- * Desk desktop shell.
+ * Nightshift (夜班) desktop shell.
  *
  * The renderer is just the web UI; all the value sits in the Node server that
  * this shell starts as a child process. Keeping them separate means a crashed
@@ -22,6 +22,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isPackaged = app.isPackaged;
 const DEV_URL = process.env.ASSIST_DEV_URL || '';
+
+// The product is Nightshift (夜班). Installs from when it was called Desk keep
+// their data where it already is, %APPDATA%\Desk: set before anything reads it.
+app.setName('Nightshift');
+app.setPath('userData', path.join(app.getPath('appData'), 'Desk'));
+
+/** Shell text follows the system language (the web UI has its own setting). */
+const L = (zh, en) => (/^zh/i.test(app.getLocale?.() || process.env.LANG || '') ? zh : en);
 
 let win = null;
 let tray = null;
@@ -262,7 +270,10 @@ function startServer({ host = '127.0.0.1', portAttempt = 'fixed' } = {}) {
       }
       console.error(`[server] exited code=${code} signal=${signal}`);
       if (win && !win.isDestroyed()) {
-        dialog.showErrorBox('Desk 的后台进程退出了', `退出码 ${code ?? signal}。重新打开 Desk 即可恢复；数据在：\n${HOME}`);
+        dialog.showErrorBox(
+          L('夜班的后台进程退出了', 'The Nightshift server stopped'),
+          L(`退出码 ${code ?? signal}。重新打开夜班即可恢复；数据在：\n${HOME}`, `Exit code ${code ?? signal}. Reopen Nightshift to recover; your data is in:\n${HOME}`),
+        );
       }
       app.quit();
     });
@@ -389,7 +400,7 @@ async function switchTo(url) {
   const target = url ? normalizeHub(url) : '';
   if (url && !target) return { ok: false, error: '地址格式不对' };
   if (target && !(await probeHub(target))) {
-    return { ok: false, error: `连不上 ${machineLabel(target)}（机器关机了，或网络不通）` };
+    return { ok: false, error: L(`连不上 ${machineLabel(target)}（机器关机了，或网络不通）`, `Can't reach ${machineLabel(target)} (it's off, or the network is down)`) };
   }
   remoteHub = target;
   writeHub(target);
@@ -408,29 +419,29 @@ async function switchTo(url) {
 
 function machinesMenu() {
   return [
-    { label: '本机（这台电脑）', type: 'radio', checked: !remoteHub, click: () => switchTo('') },
+    { label: L('本机（这台电脑）', 'This computer'), type: 'radio', checked: !remoteHub, click: () => switchTo('') },
     ...readMachines().map((m) => ({
       label: m.name,
       type: 'radio',
       checked: m.url === remoteHub,
-      click: () => switchTo(m.url).then((r) => { if (!r.ok) dialog.showErrorBox('切换失败', r.error); }),
+      click: () => switchTo(m.url).then((r) => { if (!r.ok) dialog.showErrorBox(L('切换失败', 'Switch failed'), r.error); }),
     })),
   ];
 }
 
 /** Tray and app menu both list the machines; rebuild them after any change. */
 function refreshChrome() {
-  if (win && !win.isDestroyed()) win.setTitle(remoteHub ? `Desk — ${machineLabel(remoteHub)}` : 'Desk');
+  if (win && !win.isDestroyed()) win.setTitle(remoteHub ? `${L('夜班', 'Nightshift')} — ${machineLabel(remoteHub)}` : L('夜班', 'Nightshift'));
   buildMenu();
   if (!tray) return;
-  tray.setToolTip(remoteHub ? `Desk → ${machineLabel(remoteHub)}` : 'Desk');
+  tray.setToolTip(remoteHub ? `${L('夜班', 'Nightshift')} → ${machineLabel(remoteHub)}` : L('夜班', 'Nightshift'));
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开 Desk', click: showWindow },
+    { label: L('打开夜班', 'Open Nightshift'), click: showWindow },
     { type: 'separator' },
     ...machinesMenu(),
     { type: 'separator' },
-    { label: '打开数据目录', click: () => shell.openPath(HOME) },
-    { label: '退出', click: () => { quitting = true; app.quit(); } },
+    { label: L('打开数据目录', 'Open data folder'), click: () => shell.openPath(HOME) },
+    { label: L('退出', 'Quit'), click: () => { quitting = true; app.quit(); } },
   ]));
 }
 
@@ -440,8 +451,8 @@ function createTray() {
   if (HUB_MODE) {
     // A headless hub has no window and no machine list, only its data folder.
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开数据目录', click: () => shell.openPath(HOME) },
-      { label: '退出', click: () => { quitting = true; app.quit(); } },
+      { label: L('打开数据目录', 'Open data folder'), click: () => shell.openPath(HOME) },
+      { label: L('退出', 'Quit'), click: () => { quitting = true; app.quit(); } },
     ]));
     return;
   }
@@ -453,20 +464,20 @@ function buildMenu() {
   if (HUB_MODE) return;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: 'Desk',
+      label: L('夜班', 'Nightshift'),
       submenu: [
-        { label: '机器', submenu: machinesMenu() },
+        { label: L('机器', 'Machines'), submenu: machinesMenu() },
         { type: 'separator' },
-        { label: '打开数据目录', click: () => shell.openPath(HOME) },
-        { label: '重新加载界面', accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
-        { label: '开发者工具', accelerator: 'F12', click: () => win?.webContents.toggleDevTools() },
+        { label: L('打开数据目录', 'Open data folder'), click: () => shell.openPath(HOME) },
+        { label: L('重新加载界面', 'Reload'), accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
+        { label: L('开发者工具', 'Developer tools'), accelerator: 'F12', click: () => win?.webContents.toggleDevTools() },
         { type: 'separator' },
-        { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => { quitting = true; app.quit(); } },
+        { label: L('退出', 'Quit'), accelerator: 'CmdOrCtrl+Q', click: () => { quitting = true; app.quit(); } },
       ],
     },
-    { label: '编辑', role: 'editMenu' },
+    { label: L('编辑', 'Edit'), role: 'editMenu' },
     {
-      label: '视图',
+      label: L('视图', 'View'),
       submenu: [
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
         { type: 'separator' }, { role: 'togglefullscreen' },
@@ -550,7 +561,7 @@ if (!gotLock) {
         serverPort = port;
         console.log(`[desk] HUB MODE on http://${HUB_HOST}:${port}/ (home: ${HOME})`);
         createTray();
-        tray?.setToolTip(`Desk Hub :${port}`);
+        tray?.setToolTip(`Nightshift Hub :${port}`);
         // Keep the process alive with no windows.
         app.dock?.hide?.();
         return;
@@ -579,7 +590,7 @@ if (!gotLock) {
       createWindowFor(DEV_URL || remoteHub || localUrl());
       createTray();
     } catch (err) {
-      dialog.showErrorBox('Desk 启动失败', String(err?.stack || err));
+      dialog.showErrorBox(L('夜班启动失败', 'Nightshift failed to start'), String(err?.stack || err));
       app.quit();
     }
   });

@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Desk" />
+<meta name="apple-mobile-web-app-title" content="夜班" />
 <meta name="format-detection" content="telephone=no" />
-<title>Desk · 个人助理</title>
+<title>夜班 · 个人助理</title>
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="icon" href="icons/icon-32.png" sizes="32x32" />
@@ -2436,6 +2436,13 @@
   .shape-btn.active { background: var(--panel-2); border-color: var(--border-strong); box-shadow: none; }
   .swatch { width: 30px; height: 30px; box-shadow: none; }
   .swatch.active { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg) inset; }
+
+  /* brand mark = the app icon (crescent with the bots' eyes) */
+  .brand-mark,
+  html[data-theme="light"] .brand-mark {
+    background: url("icons/icon-64.png") center / cover no-repeat;
+    box-shadow: none; border-radius: 7px;
+  }
 </style>
 </head>
 <body>
@@ -2650,7 +2657,7 @@
 
       <section class="dsec" id="sec-model">
         <div class="dsec-head">模型</div>
-        <p class="dsec-sub">接入一个真实模型，Desk 才能听懂你的话。不接入时用内置演示，回答是脚本写好的。</p>
+        <p class="dsec-sub">接入一个真实模型，夜班才能听懂你的话。不接入时用内置演示，回答是脚本写好的。</p>
 
         <form id="settings-form" novalidate>
           <label class="lbl" for="set-provider">服务商</label>
@@ -2772,12 +2779,12 @@
           <div class="pair-hint">手机浏览器打开这个地址，输入配对码</div>
           <div class="pair-empty" id="pair-empty" hidden></div>
         </div>
-        <div class="row-note">配对码只用于把手机接进这台电脑上的 Desk，不会上传到任何地方。</div>
+        <div class="row-note">配对码只用于把手机接进这台电脑上的夜班，不会上传到任何地方。</div>
       </section>
 
       <section class="dsec" id="sec-about">
         <div class="dsec-head">关于</div>
-        <div class="kv"><span class="k">应用</span><span class="v" id="about-app">Desk</span></div>
+        <div class="kv"><span class="k">应用</span><span class="v" id="about-app">夜班</span></div>
         <div class="kv"><span class="k">版本</span><span class="v" id="about-version">—</span></div>
         <div class="kv"><span class="k">服务</span><span class="v" id="about-server">—</span></div>
         <div class="kv"><span class="k">机器地址</span><span class="v" id="about-origin">—</span></div>
@@ -2843,7 +2850,7 @@
 
     <div class="row-note">
       填完点「连接并自动配置」就行，剩下的都自动：
-      装依赖 → 部署 Desk → 配好每个 Bot 的桌面 → 自动配对并加进机器列表。
+      装依赖 → 部署夜班 → 配好每个 Bot 的桌面 → 自动配对并加进机器列表。
       密码只用于这一次配置，不会保存。
     </div>
 
@@ -2948,12 +2955,12 @@
   <div class="auth-card">
     <div class="auth-top">
       <div class="brand-mark" aria-hidden="true"></div>
-      <span class="name" id="auth-app-name">Desk</span>
+      <span class="name" id="auth-app-name">夜班</span>
     </div>
-    <h1>连接你的 Desk</h1>
-    <p class="auth-sub">Desk 正在这台机器上运行。这台设备还没有获得授权——输入地址和配对码，连接一次就好。</p>
+    <h1>连接你的夜班</h1>
+    <p class="auth-sub">夜班正在这台机器上运行。这台设备还没有获得授权——输入地址和配对码，连接一次就好。</p>
 
-    <label class="lbl" for="auth-url">Desk 地址</label>
+    <label class="lbl" for="auth-url">夜班地址</label>
     <input class="field" id="auth-url" autocomplete="off" spellcheck="false" inputmode="url" />
 
     <label class="lbl" for="auth-code">配对码</label>
@@ -2962,7 +2969,7 @@
     <button class="btn primary block" id="auth-connect" type="button">连接</button>
     <div class="auth-msg" id="auth-msg" role="alert"></div>
 
-    <p class="auth-foot">配对码是电脑上 Desk 的「设置 → 配对」里的 8 位数字，只在这台设备上生效。</p>
+    <p class="auth-foot">配对码是电脑上夜班的「设置 → 配对」里的 8 位数字，只在这台设备上生效。</p>
   </div>
 </div>
 
@@ -4194,7 +4201,7 @@ async function api(path, options = {}) {
   try {
     res = await fetch(path, opts);
   } catch (cause) {
-    const err = new Error('无法连接 Desk 服务，网络可能断了。');
+    const err = new Error('无法连接夜班服务，网络可能断了。');
     err.status = 0;
     err.cause = cause;
     throw err;
@@ -4359,7 +4366,7 @@ async function connectDevice() {
     button.disabled = false;
     button.textContent = '连接';
     if (err.code === 'PAIR_INVALID_CODE' || err.status === 401) {
-      setAuthMsg('配对码不对，检查一下电脑上 Desk 的「设置 → 配对」。');
+      setAuthMsg('配对码不对，检查一下电脑上夜班的「设置 → 配对」。');
     } else if (err.code === 'PAIR_RATE_LIMITED' || err.status === 429) {
       setAuthMsg('试得太多次了，等一分钟再试。');
     } else if (err.status === 404) {
@@ -4442,7 +4449,7 @@ function showFatal(err) {
   $('app').classList.remove('is-hidden');
   messagesEl.innerHTML = '';
   const wrap = el('div', 'empty');
-  wrap.appendChild(el('h2', null, '连不上 Desk'));
+  wrap.appendChild(el('h2', null, '连不上夜班'));
   wrap.appendChild(el('p', null, err && err.message ? err.message : '服务没有响应。'));
   const retry = el('button', 'btn primary', '重试');
   retry.addEventListener('click', () => location.reload());
@@ -4489,7 +4496,7 @@ function updateModelUi() {
   // about block
   const st = state.settings || {};
   const app = st.app || {};
-  $('about-app').textContent = app.name || (state.config && state.config.name) || 'Desk';
+  $('about-app').textContent = '夜班 Nightshift';
   $('about-version').textContent = app.version || (state.config && state.config.version) || '—';
   const server = st.server || {};
   $('about-server').textContent = `${server.host || location.hostname}${server.port ? ':' + server.port : (location.port ? ':' + location.port : '')}`;
@@ -5033,7 +5040,7 @@ function longBlock(label, text, { clampAt = 600, labelIsRaw = false } = {}) {
 const TOOL_TEXT = {
   shell: { label: '执行命令', title: '想在这台电脑上运行一条命令', impact: '命令会以你当前的用户身份运行，可能出现你没预料到的改动。' },
   fs_write: { label: '写入文件', title: '想写入一个文件', impact: '如果同名文件已经存在，里面的内容会被覆盖。' },
-  fs_delete: { label: '删除文件', title: '想删除一个文件或文件夹', impact: '删掉之后，Desk 里没有撤销按钮。' },
+  fs_delete: { label: '删除文件', title: '想删除一个文件或文件夹', impact: '删掉之后，夜班里没有撤销按钮。' },
   fs_mkdir: { label: '新建文件夹', title: '想新建一个文件夹', impact: '只会在工作区里加一个目录，不改动已有文件。' },
   fs_read: { label: '读取文件', title: '想读取一个文件', impact: '只会读取内容，不会改动它。' },
   fs_list: { label: '查看目录', title: '想看看目录里有什么', impact: '只会读取文件名，不会改动任何东西。' },
@@ -6902,7 +6909,7 @@ function renderMachineMenu() {
   const menu = $('machine-menu');
   if (!menu) return;
   if (!machineBridge) {
-    menu.innerHTML = '<button type="button" disabled>在 Desk 客户端里才能切换机器</button>';
+    menu.innerHTML = '<button type="button" disabled>在夜班客户端里才能切换机器</button>';
     return;
   }
   const rows = [{ url: '', name: '本机', sub: '这台电脑', current: machineBridge.local }]
@@ -6921,7 +6928,7 @@ function renderMachinesList() {
   const box = $('set-machines-list');
   if (!box) return;
   if (!machineBridge) {
-    box.innerHTML = `<div class="machine-empty">当前：${escapeHtml(machineDisplayName())}。在浏览器或手机里打开时只能用当前这台；添加和切换机器请在 Desk 客户端里操作。</div>`;
+    box.innerHTML = `<div class="machine-empty">当前：${escapeHtml(machineDisplayName())}。在浏览器或手机里打开时只能用当前这台；添加和切换机器请在夜班客户端里操作。</div>`;
     return;
   }
   const row = (m) => `

@@ -1,6 +1,6 @@
 appId: com.desk.assistant
-productName: Desk
-copyright: Copyright 漏 2026
+productName: Nightshift
+copyright: Copyright © 2026 Nightshift
 
 directories:
   output: dist
@@ -57,8 +57,8 @@ win:
     - target: portable
       arch: [x64]
   icon: build/icon.ico
-  publisherName: Desk
-  artifactName: Desk-${version}-${arch}.${ext}
+  publisherName: Nightshift
+  artifactName: Nightshift-${version}-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -67,16 +67,16 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Desk
+  shortcutName: Nightshift
   deleteAppDataOnUninstall: false
-  uninstallDisplayName: Desk (涓汉鍔╃悊)
+  uninstallDisplayName: "Nightshift (夜班)"
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
-  artifactName: Desk-Setup-${version}.${ext}
+  artifactName: Nightshift-Setup-${version}.${ext}
 
 portable:
-  artifactName: Desk-Portable-${version}.${ext}
+  artifactName: Nightshift-Portable-${version}.${ext}
 
 mac:
   target: [dmg]

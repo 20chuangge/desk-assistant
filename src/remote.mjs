@@ -27,7 +27,7 @@ async function loadSsh2() {
     try {
       ssh2Module = await import('ssh2');
     } catch {
-      throw remoteError('REMOTE_NO_SSH2', '这台机器上没有 ssh2 依赖，无法再远程配置别的机器；请在 Desk 客户端里操作。');
+      throw remoteError('REMOTE_NO_SSH2', '这台机器上没有 ssh2 依赖，无法再远程配置别的机器；请在夜班客户端里操作。');
     }
   }
   return ssh2Module;
@@ -283,7 +283,7 @@ export function createProvisioner() {
         sudoPrefix = "sudo -S -p '' ";
       }
 
-      setProgress(job, '打包 Desk 程序…');
+      setProgress(job, '打包夜班程序…');
       const packed = await packApp();
       try {
         setProgress(job, `上传程序（${Math.max(1, Math.round(packed.bytes / 1024 / 1024))} MB）…`);
