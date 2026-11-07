@@ -1,45 +1,34 @@
-# Desk — a personal AI assistant with its own computer
+# Nightshift · 夜班
 
-A local, runnable replica of the "AI teammate" product category (reference
-product: xAI's Grok Bot): named bots with roles, **one shared workspace**, per-bot
-memory, a shared library of markdown skills, scheduled routines, and a human
-approval boundary that HIGH-risk actions cannot cross.
+你睡觉，它值夜班。一个有自己电脑的 AI 助理：说一句要做什么，它在电脑上把事情办完。
 
-Everything runs offline with **zero dependencies** and **no API keys**. The model
-provider is pluggable; the default is a deterministic scripted planner, so the
-whole product can be demonstrated, tested and inspected without a network.
+- **一个助理就够**：默认的「助理」什么都能做，也能自己建 Bot、拉群分工。
+- **多台机器**：闲置电脑或云主机填上 IP、账号、密码，自动装好；切换机器，整个界面跟着切。支持 Ubuntu、Rocky、Windows。
+- **看得见、能接管**：每台机器的屏幕实时可看，随时接管鼠标键盘。
+- **本机先问你，远程机自主**：在你自己的电脑上，删文件、发消息这类操作会先问；远程机器放手干，危险命令一律拦下。
+- **记忆、技能、定时任务**：记住你的习惯，把做过的流程存成技能，按时自动跑。
+- **附件和语音**：拖文件、贴截图，或者按 Ctrl+D 直接说。
+- **一处配置**：模型和语音密钥配一次，所有机器共用。
 
+## 下载
+
+到 [Releases](../../releases) 下载 `Nightshift-Setup-x.y.z.exe`（安装版）或 `Nightshift-Portable-x.y.z.exe`（免安装）。首次打开后在「设置 → 模型」填一个模型密钥（DeepSeek、通义、Kimi、OpenAI 等 OpenAI 兼容接口都行）。
+
+## 从源码运行
+
+```bash
+npm install
+npm start                # 服务 + 网页界面 http://127.0.0.1:4390
+npm run desktop          # 桌面应用
+npm run smoke            # 全量自测
+npm run desktop:build    # 出 Windows 安装包 → desktop/dist/
 ```
-Node >= 20 · npm start · npm run smoke · no node_modules
-```
+
+需要 Node ≥ 20。添加远程机器、空白机测试方案见 `docs/`（`HUB.md`、`TEST-PLAN.md`）。
 
 ---
 
-## v1 状态（2026-11-05）
-
-| 端 | 状态 | 怎么拿到 |
-|---|---|---|
-| **Windows 桌面** | ✅ 已出包：安装版 + 免安装版 | `npm run desktop:build` → `desktop/dist/Desk-Setup-1.0.0.exe`、`Desk-Portable-1.0.0.exe` |
-| **macOS / Linux 桌面** | ✅ 工程就绪（同一套 Electron 壳） | `cd desktop && npx electron-builder --mac` / `--linux`（需在对应系统上跑） |
-| **手机（PWA）** | ✅ 已内置 manifest + service worker | 用 https 打开（Tailscale / Cloudflare Tunnel），浏览器"添加到主屏幕" |
-| **Android APK** | 🟡 工程与 CI 就绪，本机无 JDK/SDK | `docs/BUILD-MOBILE.md` + `.github/workflows/android.yml` |
-| **iOS IPA** | 🟡 工程与 CI 就绪，本机无 Xcode | `.github/workflows/ios.yml`（macOS runner + 签名 Secrets） |
-
-v1 相对最初 demo 的新增：**真模型流式**（SSE 逐字出）、**设置页**（provider/baseUrl/model/key，密钥只写不读）、**手机配对**（8 位配对码 + HttpOnly cookie）、**崩溃恢复**（待批卡与在飞回合落盘）、**Windows 安装包**、**PWA**。
-
-## 部署形态：本机 or Hub
-
-Desk 是一个 Node 服务 + 一个网页界面，所以**服务跑在哪台机器，Bot 就在哪台机器干活**。
-
-- **本机模式**（默认）：双击 App，服务和界面都在你这台电脑上。
-- **Hub 模式**（推荐长期用）：服务跑在闲置 PC 或云主机上，笔记本/手机只当遥控器。
-  - 起服务：`hub/start-hub.bat`（Windows）或 `hub/start-hub.sh` / systemd / `hub/docker-compose.yml`
-  - 笔记本连过去：菜单 **Desk → 切换到别的 Hub…** 填地址（记住后下次自动连）
-  - 手机：浏览器打开 Hub 地址 + 配对码
-  - 细节与安全：`docs/HUB.md`
-
-
-
+以下是开发参考（架构、接口、扩展方式）。
 
 ## Quick start
 
