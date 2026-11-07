@@ -645,6 +645,16 @@ ipcMain.handle('desk:remove-machine', async (_event, url) => {
 // lifecycle
 // ---------------------------------------------------------------------------
 
+// The microphone needs a secure context, and a machine's hub is plain http on
+// the LAN. Chromium only reads this switch at startup, so a machine added in
+// this run gets voice input after the next launch.
+{
+  const origins = readMachines()
+    .map((m) => { try { return new URL(m.url).origin; } catch { return null; } })
+    .filter((o) => o && o.startsWith('http://'));
+  if (origins.length) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', origins.join(','));
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();

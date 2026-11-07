@@ -2447,6 +2447,17 @@
   /* the empty chat shows who you are talking to */
   .empty-avatar { width: 54px; height: 54px; margin-bottom: 18px; border-radius: 14px; }
 
+  /* voice input ------------------------------------------------------ */
+  .mic-btn {
+    flex: none; align-self: flex-end; width: 34px; height: 34px; margin: 0 4px 2px 0;
+    display: grid; place-items: center; border-radius: 10px; border: 0; background: transparent; color: var(--dim);
+  }
+  .mic-btn:hover { background: var(--panel-2); color: var(--text); }
+  .mic-btn.rec { background: var(--red); color: #fff; animation: mic-pulse 1.4s ease-in-out infinite; }
+  .mic-btn.busy { opacity: 0.6; pointer-events: none; }
+  @keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(229, 83, 75, 0.45); } 50% { box-shadow: 0 0 0 6px rgba(229, 83, 75, 0); } }
+  .composer-box.recording textarea::placeholder { color: var(--red); opacity: 1; }
+
   /* attachments ------------------------------------------------------ */
   .attach-btn {
     flex: none; align-self: flex-end; width: 34px; height: 34px; margin: 0 2px 2px 0;
@@ -2596,6 +2607,9 @@
           </button>
           <input type="file" id="attach-input" multiple hidden />
           <textarea id="composer" rows="1" placeholder="告诉助理要做什么…" aria-label="消息"></textarea>
+          <button class="mic-btn" id="mic-btn" type="button" title="语音输入（Ctrl+D）" aria-label="语音输入">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          </button>
           <button class="send-btn" id="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
           </button>
@@ -2731,6 +2745,21 @@
           <div class="row-note">新添加的机器会自动用上本机的模型。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。</div>
           <button class="btn" id="model-sync" type="button" style="margin-top:10px">同步到所有机器</button>
           <div class="row-note" id="model-sync-note" hidden></div>
+        </div>
+        <div class="voice-set" id="voice-set">
+          <div class="dsec-head" style="font-size:13px;margin:22px 0 6px">语音输入</div>
+          <div class="row-note" id="voice-state">正在读取…</div>
+          <label class="lbl" for="voice-baseurl">接口地址</label>
+          <input class="field" id="voice-baseurl" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" spellcheck="false" inputmode="url" />
+          <label class="lbl" for="voice-model">模型</label>
+          <input class="field" id="voice-model" placeholder="FunAudioLLM/SenseVoiceSmall" autocomplete="off" spellcheck="false" />
+          <label class="lbl" for="voice-apikey">API 密钥</label>
+          <input class="field" id="voice-apikey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
+          <a class="row-note key-link" id="voice-keyurl" href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noreferrer">免费获取硅基流动的密钥（SenseVoice 语音转写免费）</a>
+          <div class="btn-row">
+            <button class="btn" id="voice-save" type="button">保存语音设置</button>
+            <button class="btn tiny danger" id="voice-clear" type="button" hidden>清除语音密钥</button>
+          </div>
         </div>
       </section>
 
@@ -5146,6 +5175,147 @@ function renderAttachStrip() {
   }
 }
 
+/* --- voice input ---------------------------------------------------------
+   Click the mic (or Ctrl+D) to talk, click again to stop; the words land in
+   the composer to be read and sent like typing. Esc throws the take away. */
+const VOICE_MAX_MS = 3 * 60 * 1000;
+const voice = { status: null, recorder: null, stream: null, chunks: [], started: 0, timer: null, cancelled: false };
+
+async function loadVoice() {
+  const v = await api('/api/voice');
+  voice.status = v;
+  const note = $('voice-state');
+  if (!note) return v;
+  note.textContent = v.available
+    ? (v.source === 'model' ? `可以用了：沿用聊天模型的密钥，转写模型 ${v.model}。` : `可以用了：${v.model}。`)
+    : '还不能用：当前的聊天模型服务商不提供语音转写，填一个硅基流动的密钥就行。';
+  $('voice-baseurl').value = v.source === 'own' ? v.baseUrl : '';
+  $('voice-baseurl').placeholder = v.preset?.baseUrl || '';
+  $('voice-model').value = v.source === 'own' ? v.model : '';
+  $('voice-model').placeholder = v.preset?.model || '';
+  $('voice-apikey').value = '';
+  $('voice-apikey').placeholder = v.hasKey ? '已保存（留空不改）' : 'sk-…';
+  $('voice-clear').hidden = !v.hasKey;
+  return v;
+}
+
+async function saveVoice(clear = false) {
+  const body = clear
+    ? { apiKey: '' }
+    : { baseUrl: $('voice-baseurl').value.trim(), model: $('voice-model').value.trim() };
+  const key = $('voice-apikey').value.trim();
+  if (!clear && key) body.apiKey = key;
+  try {
+    await api('/api/voice', { method: 'PUT', body });
+    await loadVoice();
+    toast(clear ? '语音密钥已清除' : '语音设置已保存');
+  } catch (err) {
+    toast(`保存失败：${err.message}`, true);
+  }
+}
+
+function setMicUi(mode) {
+  const btn = $('mic-btn');
+  const box = btn.closest('.composer-box');
+  const input = $('composer');
+  btn.classList.toggle('rec', mode === 'rec');
+  btn.classList.toggle('busy', mode === 'busy');
+  box.classList.toggle('recording', mode === 'rec');
+  btn.title = mode === 'rec' ? '结束并转成文字（Ctrl+D）' : '语音输入（Ctrl+D）';
+  if (mode === 'rec' || mode === 'busy') {
+    if (input.dataset.ph === undefined) input.dataset.ph = input.placeholder;
+    input.readOnly = true;
+  } else {
+    input.readOnly = false;
+    if (input.dataset.ph !== undefined) { input.placeholder = input.dataset.ph; delete input.dataset.ph; }
+  }
+  if (mode === 'busy') input.placeholder = '正在转成文字…';
+}
+
+function tickRecording() {
+  const s = Math.floor((Date.now() - voice.started) / 1000);
+  $('composer').placeholder = `正在听… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} · 再点一次麦克风结束，Esc 取消`;
+  if (Date.now() - voice.started >= VOICE_MAX_MS) stopRecording();
+}
+
+async function toggleVoice() {
+  if (voice.recorder) { stopRecording(); return; }
+  if ($('mic-btn').classList.contains('busy')) return;
+  let status = voice.status;
+  try { status = await loadVoice(); } catch { /* use what we have */ }
+  if (!status?.available) {
+    toast('先配置语音转文字（一个硅基流动的免费密钥就行）', true);
+    openSettings('sec-model');
+    setTimeout(() => $('voice-set')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    toast(window.desk ? '这台机器刚加上，重开一次夜班后就能用麦克风' : '这个页面不能用麦克风（需要 https 或本机地址）', true);
+    return;
+  }
+  try {
+    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (err) {
+    toast(err.name === 'NotAllowedError' ? '麦克风被拒绝了：请在系统设置里允许夜班使用麦克风' : err.name === 'NotFoundError' ? '没找到麦克风' : `打不开麦克风：${err.message}`, true);
+    return;
+  }
+  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
+  voice.recorder = new MediaRecorder(voice.stream, mime ? { mimeType: mime } : undefined);
+  voice.chunks = [];
+  voice.cancelled = false;
+  voice.recorder.ondataavailable = (event) => { if (event.data?.size) voice.chunks.push(event.data); };
+  voice.recorder.onstop = finishRecording;
+  voice.recorder.start(1000);
+  voice.started = Date.now();
+  setMicUi('rec');
+  tickRecording();
+  voice.timer = setInterval(tickRecording, 500);
+}
+
+function stopRecording(cancel = false) {
+  if (!voice.recorder) return;
+  voice.cancelled = cancel;
+  clearInterval(voice.timer);
+  try { voice.recorder.stop(); } catch { finishRecording(); }
+}
+
+async function finishRecording() {
+  const recorder = voice.recorder;
+  voice.recorder = null;
+  voice.stream?.getTracks().forEach((t) => t.stop());
+  voice.stream = null;
+  const type = (recorder?.mimeType || 'audio/webm').split(';')[0];
+  const blob = new Blob(voice.chunks, { type });
+  voice.chunks = [];
+  if (voice.cancelled || Date.now() - voice.started < 600 || !blob.size) {
+    setMicUi('idle');
+    if (!voice.cancelled) toast('太短了，没听到内容', true);
+    return;
+  }
+  setMicUi('busy');
+  try {
+    const res = await fetch('/api/voice/transcribe', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': type }, body: blob });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+    setMicUi('idle');
+    const text = String(data.text || '').trim();
+    if (!text) { toast('没听清，再说一次？', true); return; }
+    const input = $('composer');
+    const at = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, at);
+    const after = input.value.slice(input.selectionEnd ?? at);
+    const glue = before && !/\s$/.test(before) ? ' ' : '';
+    input.value = before + glue + text + after;
+    const caret = (before + glue + text).length;
+    input.focus();
+    input.setSelectionRange(caret, caret);
+    autoGrow(input);
+  } catch (err) {
+    setMicUi('idle');
+    toast(err.message, true);
+  }
+}
+
 async function addFiles(fileList) {
   for (const file of [...fileList].slice(0, 10)) {
     if (state.pendingFiles.length >= 10) { toast('一条消息最多 10 个附件', true); break; }
@@ -6710,6 +6880,7 @@ function openSettings(section) {
   loadSkills();
   loadMemory();
   loadSettings().catch(() => { /* keep whatever we have */ });
+  loadVoice().catch(() => { /* older server: no voice */ });
   loadPolicy().catch(() => { /* older server: switch stays off */ });
   closeSidebar();
   closePanel();
@@ -7797,6 +7968,18 @@ function wireChrome() {
     if (event.dataTransfer?.files?.length) { event.preventDefault(); addFiles(event.dataTransfer.files); }
   });
   $('send-btn').addEventListener('click', send);
+  $('mic-btn').addEventListener('click', toggleVoice);
+  $('voice-save')?.addEventListener('click', () => saveVoice(false));
+  $('voice-clear')?.addEventListener('click', () => saveVoice(true));
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd' && !state.settingsOpen) {
+      event.preventDefault();
+      toggleVoice();
+    } else if (event.key === 'Escape' && voice.recorder) {
+      event.preventDefault();
+      stopRecording(true);
+    }
+  });
   $('composer').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();

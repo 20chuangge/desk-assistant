@@ -63,6 +63,7 @@ import { publicProviderCatalogue } from './providers.mjs';
 import { configure as configureDesktops, desktopInfo, desktopSupport, ensureDesktop, listDesktops, stopDesktop } from './desktops.mjs';
 import { createProvisioner } from './remote.mjs';
 import { bridgeWebSocket } from './wsbridge.mjs';
+import * as voiceModule from './voice.mjs';
 import {
   evaluateAuth,
   isAuthExemptPath,
@@ -112,6 +113,7 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
   // swaps the live model client without a restart.
   const settings = await settingsModule.loadSettings();
   const apiKey = await settingsModule.loadSecret();
+  const voice = await voiceModule.loadVoice();
   const security = await loadOrCreateSecurity();
 
   const bus = new EventBus();
@@ -221,6 +223,7 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
     model,
     settings,
     apiKey, // never projected into a response; only `hasKey` leaves this module
+    voice, // speech-to-text config; its key is write-only too
     security,
     workspaceDir,
     startedAt: Date.now(),
@@ -588,6 +591,39 @@ route('PUT', /^\/api\/settings$/, async (_req, _res, { body, state }) => {
 
   return { ok: true, model: settingsModule.publicModel(state.settings, state.apiKey) };
 });
+
+// --- voice input --------------------------------------------------------------
+//
+//   GET  /api/voice              -> {available, source:'own'|'model'|null, baseUrl, model, hasKey, preset}
+//   PUT  /api/voice              {baseUrl?, model?, apiKey?} -> same shape
+//   POST /api/voice/transcribe   raw audio (content-type audio/webm…), ?lang=zh -> {text, latencyMs}
+
+route('GET', /^\/api\/voice$/, async (_req, _res, { state }) => voiceModule.publicVoice(state.voice, state.settings, state.apiKey));
+
+route('PUT', /^\/api\/voice$/, async (_req, _res, { body, state }) => {
+  const patch = {};
+  for (const k of ['baseUrl', 'model', 'apiKey']) if (body?.[k] !== undefined) patch[k] = body[k];
+  if (!Object.keys(patch).length) throw httpError(400, 'SETTINGS_EMPTY', 'body needs {baseUrl?, model?, apiKey?}');
+  state.voice = await voiceModule.saveVoice(state.voice, patch);
+  return voiceModule.publicVoice(state.voice, state.settings, state.apiKey);
+});
+
+route(
+  'POST',
+  /^\/api\/voice\/transcribe$/,
+  async (req, _res, { state, query }) => {
+    const bytes = await readRawBody(req, voiceModule.VOICE_MAX_BYTES, {
+      code: 'AUDIO_TOO_LARGE',
+      message: '一段语音最多 10 MB（约 10 分钟）',
+    });
+    const service = voiceModule.resolveVoice(state.voice, state.settings, state.apiKey);
+    const lang = String(query.get('lang') || '').trim();
+    return voiceModule.transcribe(service, bytes, req.headers['content-type'], {
+      language: /^[a-z]{2}$/.test(lang) ? lang : undefined,
+    });
+  },
+  { rawBody: true },
+);
 
 route('POST', /^\/api\/settings\/test$/, async (_req, _res, { body, state }) => {
   // Accept optional unsaved overrides so the UI can test before it saves.

@@ -119,6 +119,7 @@ async function main() {
     await stage('routine success', scenarioRoutineSuccess);
     await stage('skill save', scenarioSkillSaveViaBot);
     await stage('error shapes', scenarioErrors);
+    await stage('attachments and voice', scenarioAttachmentsAndVoice);
     await stage('browser automation', () => scenarioBrowser({ toolsMod, browserMod, home }));
     await stage('unit checks', () =>
       unitChecks({ approvals, routines, skillsMod, memoryMod, toolsMod, botsMod, storeMod, home }),
@@ -1543,6 +1544,62 @@ async function scenarioSkillSaveViaBot() {
   check('new skill appears in the shared library', after.json.some((s) => s.slug === 'inbox-triage'), after.json.map((s) => s.slug).join(','));
   const saved = await api('/api/skills/inbox-triage');
   check('saved skill has the required frontmatter', saved.status === 200 && saved.json.skill.steps.length >= 3 && Boolean(saved.json.skill.approval_notes));
+}
+
+async function scenarioAttachmentsAndVoice() {
+  // Attachments: upload, read back, reference in a message.
+  const up = await fetch(`${base}/api/uploads`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('笔记.txt') },
+    body: 'hello attachment',
+  });
+  const upJson = await up.json();
+  check('upload: stored under uploads/<date>/', up.ok && /^uploads\/\d{4}-\d{2}-\d{2}\/笔记\.txt$/.test(upJson.path), JSON.stringify(upJson));
+  const back = await fetch(`${base}/api/workspace/file?path=${encodeURIComponent(upJson.path)}`);
+  check('upload: reads back as a download', back.ok && (await back.text()) === 'hello attachment' && /attachment/.test(back.headers.get('content-disposition') || ''));
+  const outside = await fetch(`${base}/api/workspace/file?path=${encodeURIComponent('../config/settings.json')}`);
+  check('workspace file: refuses paths outside the workspace', outside.status === 400);
+  const fake = await api('/api/bots/chief/message', { method: 'POST', body: { text: 'hi', attachments: [{ path: 'config/settings.json' }] } });
+  check('message: only uploaded files can be attached', fake.status === 400 && fake.json?.error?.code === 'BAD_ATTACHMENT');
+
+  // Voice: a fake OpenAI-compatible /audio/transcriptions.
+  const seen = [];
+  const stt = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('latin1');
+      seen.push({ url: req.url, auth: req.headers.authorization, type: req.headers['content-type'], body });
+      if (req.headers.authorization !== 'Bearer voice-key') { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":{"message":"bad key"}}'); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ text: '<|zh|><|NEUTRAL|>帮我看看磁盘' }));
+    });
+  });
+  await new Promise((r) => stt.listen(0, '127.0.0.1', r));
+  try {
+    const before = await api('/api/voice');
+    check('voice: mock chat provider means not available yet', before.status === 200 && before.json.available === false && before.json.hasKey === false);
+    const notReady = await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: Buffer.from('abc') });
+    check('voice: transcribe without a service says so', notReady.status === 409);
+    const sttUrl = `http://127.0.0.1:${stt.address().port}/v1`;
+    const saved = await api('/api/voice', { method: 'PUT', body: { baseUrl: sttUrl, model: 'stt-1', apiKey: 'voice-key' } });
+    check('voice: own settings make it available, key never returned', saved.status === 200 && saved.json.available && saved.json.source === 'own' && saved.json.hasKey && !JSON.stringify(saved.json).includes('voice-key'));
+    const tr = await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers: { 'content-type': 'audio/webm;codecs=opus' }, body: Buffer.from('fake-opus-bytes') });
+    const trJson = await tr.json();
+    check('voice: transcription comes back, tags stripped', tr.ok && trJson.text === '帮我看看磁盘', JSON.stringify(trJson));
+    const call = seen.at(-1);
+    check('voice: multipart to /audio/transcriptions with file + model', call?.url === '/v1/audio/transcriptions' && call.type.includes('multipart/form-data') && call.body.includes('name="model"\r\n\r\nstt-1') && call.body.includes('filename="voice.webm"') && call.body.includes('fake-opus-bytes'));
+    await api('/api/voice', { method: 'PUT', body: { apiKey: 'wrong' } });
+    const denied = await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: Buffer.from('x') });
+    const deniedJson = await denied.json();
+    check('voice: a rejected key is reported, not swallowed', denied.status === 502 && /Key/.test(deniedJson.error?.message || ''));
+    const empty = await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers: { 'content-type': 'audio/webm' } });
+    check('voice: empty recording is rejected', empty.status === 400);
+    const cleared = await api('/api/voice', { method: 'PUT', body: { apiKey: '' } });
+    check('voice: clearing the key turns it off again', cleared.status === 200 && cleared.json.available === false);
+  } finally {
+    stt.close();
+  }
 }
 
 async function scenarioErrors() {
