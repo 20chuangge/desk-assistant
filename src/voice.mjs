@@ -28,11 +28,15 @@ export const STT_FROM_PROVIDER = {
   groq: 'whisper-large-v3-turbo',
 };
 
-export const VOICE_PRESET = {
-  baseUrl: 'https://api.siliconflow.cn/v1',
-  model: 'FunAudioLLM/SenseVoiceSmall',
-  keyUrl: 'https://cloud.siliconflow.cn/account/ak',
-};
+/** Services with an OpenAI-compatible /audio/transcriptions. Any other one works through "custom". */
+export const VOICE_PROVIDERS = [
+  { id: 'siliconflow', label: '硅基流动 SenseVoice（免费，中文好）', baseUrl: 'https://api.siliconflow.cn/v1', model: 'FunAudioLLM/SenseVoiceSmall', keyUrl: 'https://cloud.siliconflow.cn/account/ak' },
+  { id: 'openai', label: 'OpenAI Whisper', baseUrl: 'https://api.openai.com/v1', model: 'whisper-1', keyUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'groq', label: 'Groq Whisper（快，有免费额度）', baseUrl: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3-turbo', keyUrl: 'https://console.groq.com/keys' },
+  { id: 'custom', label: '自定义（OpenAI 兼容）', baseUrl: '', model: '', keyUrl: '' },
+];
+
+export const VOICE_PRESET = VOICE_PROVIDERS[0];
 
 export const VOICE_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -90,6 +94,7 @@ export function publicVoice(voice, settings, chatKey) {
     model: active?.model || voice.model || '',
     hasKey: Boolean(voice.apiKey),
     preset: VOICE_PRESET,
+    providers: VOICE_PROVIDERS,
   };
 }
 

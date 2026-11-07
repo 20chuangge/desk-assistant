@@ -2742,20 +2742,22 @@
         </form>
         <div class="model-share" id="model-share" hidden>
           <div class="dsec-head" style="font-size:13px;margin:22px 0 6px">所有机器共用一个模型</div>
-          <div class="row-note">新添加的机器会自动用上本机的模型和语音密钥。已经加过的机器，点下面的按钮把本机的模型和密钥同步过去。</div>
+          <div class="row-note">本机改模型或语音密钥时，会自动同步到所有机器；新添加的机器也会自动带上。只有某台机器当时没连上，才需要点下面的按钮补一次。</div>
           <button class="btn" id="model-sync" type="button" style="margin-top:10px">同步到所有机器</button>
           <div class="row-note" id="model-sync-note" hidden></div>
         </div>
         <div class="voice-set" id="voice-set">
           <div class="dsec-head" style="font-size:13px;margin:22px 0 6px">语音输入</div>
           <div class="row-note" id="voice-state">正在读取…</div>
+          <label class="lbl" for="voice-provider">语音转文字服务</label>
+          <select class="field" id="voice-provider"></select>
           <label class="lbl" for="voice-baseurl">接口地址</label>
           <input class="field" id="voice-baseurl" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" spellcheck="false" inputmode="url" />
           <label class="lbl" for="voice-model">模型</label>
           <input class="field" id="voice-model" placeholder="FunAudioLLM/SenseVoiceSmall" autocomplete="off" spellcheck="false" />
           <label class="lbl" for="voice-apikey">API 密钥</label>
           <input class="field" id="voice-apikey" type="password" placeholder="sk-…" autocomplete="new-password" spellcheck="false" />
-          <a class="row-note key-link" id="voice-keyurl" href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noreferrer">免费获取硅基流动的密钥（SenseVoice 语音转写免费）</a>
+          <a class="row-note key-link" id="voice-keyurl" href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noreferrer">获取密钥</a>
           <div class="btn-row">
             <button class="btn" id="voice-save" type="button">保存语音设置</button>
             <button class="btn tiny danger" id="voice-clear" type="button" hidden>清除语音密钥</button>
@@ -5188,15 +5190,38 @@ async function loadVoice() {
   if (!note) return v;
   note.textContent = v.available
     ? (v.source === 'model' ? `可以用了：沿用聊天模型的密钥，转写模型 ${v.model}。` : `可以用了：${v.model}。`)
-    : '还不能用：当前的聊天模型服务商不提供语音转写，填一个硅基流动的密钥就行。';
-  $('voice-baseurl').value = v.source === 'own' ? v.baseUrl : '';
-  $('voice-baseurl').placeholder = v.preset?.baseUrl || '';
-  $('voice-model').value = v.source === 'own' ? v.model : '';
-  $('voice-model').placeholder = v.preset?.model || '';
+    : '还不能用：当前的聊天模型服务商不提供语音转写，选一个下面的服务并填密钥。';
+  const providers = v.providers || [{ id: 'siliconflow', label: '硅基流动 SenseVoice', ...v.preset }];
+  voice.providers = providers;
+  const select = $('voice-provider');
+  select.innerHTML = providers.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join('');
+  const match = providers.find((p) => p.baseUrl && v.source === 'own' && p.baseUrl === v.baseUrl);
+  select.value = v.source === 'own' ? (match ? match.id : 'custom') : providers[0].id;
+  applyVoiceProvider(false);
+  if (v.source === 'own') {
+    $('voice-baseurl').value = v.baseUrl;
+    $('voice-model').value = v.model;
+  }
   $('voice-apikey').value = '';
   $('voice-apikey').placeholder = v.hasKey ? '已保存（留空不改）' : 'sk-…';
   $('voice-clear').hidden = !v.hasKey;
   return v;
+}
+
+/** Fill URL, model and key link from the chosen service. */
+function applyVoiceProvider(fill = true) {
+  const p = (voice.providers || []).find((x) => x.id === $('voice-provider').value);
+  if (!p) return;
+  const custom = p.id === 'custom';
+  $('voice-baseurl').placeholder = p.baseUrl || 'https://…/v1';
+  $('voice-model').placeholder = p.model || 'whisper-1';
+  if (fill) {
+    $('voice-baseurl').value = custom ? '' : p.baseUrl;
+    $('voice-model').value = custom ? '' : p.model;
+  }
+  const link = $('voice-keyurl');
+  link.hidden = !p.keyUrl;
+  if (p.keyUrl) link.href = p.keyUrl;
 }
 
 async function saveVoice(clear = false) {
@@ -6993,6 +7018,16 @@ async function saveSettings() {
     renderMessages();
     setStatus('ok', '已保存。新的一轮对话就会用上。');
     toast('设置已保存');
+    // One model for every machine: a change made on this computer goes to all
+    // of them at once (a remote machine's own settings stay its own).
+    if (machineBridge?.local && (machineBridge.machines || []).length && window.desk?.syncModel && payload.provider !== 'mock') {
+      setStatus('busy', '已保存，正在同步到所有机器…');
+      const res = await window.desk.syncModel().catch((err) => ({ ok: false, error: err.message }));
+      const failed = (res?.results || []).filter((r) => !r.ok);
+      if (!res?.ok) setStatus('bad', `已保存；同步到其他机器失败：${res?.error || '未知原因'}`);
+      else if (failed.length) setStatus('bad', `已保存；没同步上：${failed.map((r) => `${r.name}（${r.error}）`).join('、')}`);
+      else setStatus('ok', '已保存，并同步到所有机器。');
+    }
   } catch (err) {
     if (err.status === 401) return;
     setStatus('bad', err.status === 404
@@ -7578,20 +7613,48 @@ async function startRemoteProvision(options) {
   const barWrap = $('vnc-progress-wrap');
   const bar = $('vnc-progress-bar');
   const barStep = $('vnc-progress-step');
-  const setBar = (job) => {
+  // Typical seconds per step of the setup script; step 3 on Linux (desktop
+  // packages) and step 5 on Windows (TightVNC) are the long ones. The bar and
+  // the estimate move every second between polls, so it never looks frozen.
+  const STEP_SECONDS = {
+    linux: [5, 45, 240, 10, 10, 15, 10],
+    windows: [5, 60, 20, 10, 90, 10, 30],
+  };
+  const t0 = Date.now();
+  let cur = { step: 0, total: 0, os: '', since: Date.now() };
+  const clock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  const paint = () => {
     if (!barWrap || !bar) return;
     barWrap.hidden = false;
-    const step = Number(job?.step || 0);
-    const total = Number(job?.totalSteps || 0);
+    const { step, total } = cur;
     const known = total > 0 && step > 0;
     barWrap.querySelector('.prov-bar')?.classList.toggle('indeterminate', !known);
-    if (known) bar.style.width = `${Math.min(100, Math.round((step / total) * 100))}%`;
+    const elapsed = clock(Date.now() - t0);
+    if (!known) {
+      if (barStep) barStep.textContent = `正在连接和上传… · 已用 ${elapsed}`;
+      return;
+    }
+    const weights = STEP_SECONDS[/windows/i.test(cur.os) ? 'windows' : 'linux'];
+    const w = (i) => weights[i] ?? 15;
+    const all = Array.from({ length: total }, (_, i) => w(i)).reduce((a, b) => a + b, 0);
+    const done = Array.from({ length: step - 1 }, (_, i) => w(i)).reduce((a, b) => a + b, 0);
+    const inStep = (Date.now() - cur.since) / 1000;
+    const part = Math.min(0.92, inStep / w(step - 1)); // creep, never claim the step is done
+    bar.style.width = `${Math.min(99, Math.round(((done + part * w(step - 1)) / all) * 100))}%`;
+    const left = all - done - inStep;
     if (barStep) {
-      barStep.textContent = known
-        ? `第 ${step}/${total} 步 · 约 ${Math.max(1, total - step) * 30} 秒`
-        : '正在准备…';
+      barStep.textContent = left <= 5 ? `第 ${step}/${total} 步 · 已用 ${elapsed} · 这一步比较久，还在进行`
+        : left < 60 ? `第 ${step}/${total} 步 · 已用 ${elapsed} · 还要约 ${Math.max(10, Math.round(left / 10) * 10)} 秒`
+        : `第 ${step}/${total} 步 · 已用 ${elapsed} · 还要约 ${Math.round(left / 60)} 分钟`;
     }
   };
+  const setBar = (job) => {
+    const step = Number(job?.step || 0);
+    if (step !== cur.step) cur.since = Date.now();
+    cur = { ...cur, step, total: Number(job?.totalSteps || 0), os: job?.os || cur.os };
+    paint();
+  };
+  const ticker = setInterval(paint, 1000);
   const show = (text, kind = '') => {
     if (!progress) return;
     progress.hidden = false;
@@ -7616,11 +7679,12 @@ async function startRemoteProvision(options) {
       // Long package installs can be silent for minutes; keep the human oriented.
       if (quietTicks === 80) show('安装还在进行，软件包较大时需要几分钟…');
     }
+    clearInterval(ticker);
     if (job.state === 'error') throw new Error(job.message || '远程配置失败');
     if (!job.hubUrl) throw new Error('配置结束了，但没有拿到那台机器的地址');
 
     if (bar) bar.style.width = '100%';
-    if (barStep) barStep.textContent = '完成';
+    if (barStep) barStep.textContent = `完成 · 用时 ${clock(Date.now() - t0)}`;
     let paired = false;
     if (window.desk?.addMachine) {
       const added = await window.desk.addMachine({ url: job.hubUrl, name: options.name, pairCode: job.pairCode });
@@ -7650,6 +7714,7 @@ async function startRemoteProvision(options) {
   } catch (err) {
     show(`自动配置失败：${err.message}`, 'bad');
   } finally {
+    clearInterval(ticker);
     if (save) save.disabled = false;
   }
 }
@@ -7986,6 +8051,7 @@ function wireChrome() {
   $('send-btn').addEventListener('click', send);
   $('mic-btn').addEventListener('click', toggleVoice);
   $('voice-save')?.addEventListener('click', () => saveVoice(false));
+  $('voice-provider')?.addEventListener('change', () => applyVoiceProvider(true));
   $('voice-clear')?.addEventListener('click', () => saveVoice(true));
   document.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd' && !state.settingsOpen) {
