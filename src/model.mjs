@@ -193,29 +193,50 @@ function requestSignal(cfg, signal, timeoutMs) {
   return signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-async function postChat(cfg, body, composed, { stream }) {
-  let res;
-  try {
-    res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: stream ? 'text/event-stream' : 'application/json',
-        authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: composed,
-    });
-  } catch (err) {
-    // Surface a model error the agent loop can report instead of crashing a turn.
-    throw new Error(`model request failed: ${err.message}`);
-  }
+/** Provider hiccups worth another try: rate limits and server-side errors. */
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504, 529]);
+const RETRY_DELAYS_MS = [1500, 4000];
 
-  if (!res.ok) {
+async function postChat(cfg, body, composed, { stream }) {
+  // Retries happen before any reply byte is read, so a stream never repeats.
+  for (let attempt = 0; ; attempt += 1) {
+    const canRetry = attempt < RETRY_DELAYS_MS.length && !composed?.aborted;
+    let res;
+    try {
+      res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: stream ? 'text/event-stream' : 'application/json',
+          authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: composed,
+      });
+    } catch (err) {
+      if (canRetry && !composed?.aborted) {
+        await waitFor(RETRY_DELAYS_MS[attempt], composed);
+        continue;
+      }
+      // Surface a model error the agent loop can report instead of crashing a turn.
+      throw new Error(`model request failed: ${err.message}`);
+    }
+
+    if (res.ok) return res;
     const text = await res.text().catch(() => '');
+    if (canRetry && RETRY_STATUS.has(res.status)) {
+      await waitFor(RETRY_DELAYS_MS[attempt], composed);
+      continue;
+    }
     throw new Error(`model HTTP ${res.status}: ${text.slice(0, 400)}`);
   }
-  return res;
+}
+
+function waitFor(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener?.('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
 }
 
 /** Non-streaming `/chat/completions` (kept for compatibility and for tests). */
