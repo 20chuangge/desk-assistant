@@ -166,7 +166,9 @@ $launcher = Join-Path $AppDir 'start-hub.ps1'
 $(if ($browser) { "`$env:CHROME_PATH = '$browser'" })
 Set-Location '$AppDir'
 while (`$true) {
-  & '$nodeExe' src\server.mjs *>> '$AppDir\data\hub.log'
+  # "`$_" turns PowerShell 5.1's NativeCommandError wrapper back into the plain
+  # stderr line, so the log reads like the server wrote it.
+  & '$nodeExe' src\server.mjs 2>&1 | ForEach-Object { "`$_" } | Add-Content -Encoding UTF8 -Path '$AppDir\data\hub.log'
   Start-Sleep -Seconds 3
 }
 "@ | Set-Content -Encoding UTF8 -Path $launcher

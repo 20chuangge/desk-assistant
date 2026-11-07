@@ -56,7 +56,24 @@ function diskInfo() {
   }
 }
 
+/*
+ * The computer pane polls every few seconds and every poll used to start a
+ * process-list command; on Windows that is a PowerShell each time, which pins
+ * a 1-core machine. One lookup per 30 s, shared by everyone who asks.
+ */
+const PROCESS_TTL_MS = 30_000;
+let processCache = { at: 0, value: [], pending: null };
+
 async function topProcesses() {
+  if (processCache.pending) return processCache.pending;
+  if (Date.now() - processCache.at < PROCESS_TTL_MS) return processCache.value;
+  processCache.pending = readTopProcesses()
+    .then((value) => { processCache = { at: Date.now(), value, pending: null }; return value; })
+    .catch(() => { processCache.pending = null; return processCache.value; });
+  return processCache.pending;
+}
+
+async function readTopProcesses() {
   if (process.platform === 'win32') {
     const ps = await run('powershell', [
       '-NoProfile', '-Command',
@@ -86,7 +103,9 @@ async function topProcesses() {
 
 /** Whether a screen capture is even conceivable on this machine. */
 function displayAvailable() {
-  if (process.platform === 'win32') return true; // GUI session (or PowerShell will say no)
+  // Interactive Windows sessions set SESSIONNAME (Console, RDP-Tcp#…). A hub
+  // started by the NightshiftHub task runs in session 0, which has no screen.
+  if (process.platform === 'win32') return Boolean(process.env.SESSIONNAME);
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
@@ -96,6 +115,9 @@ function displayAvailable() {
  */
 export async function captureScreen(target) {
   await fsp.mkdir(path.dirname(target), { recursive: true });
+  if (process.platform === 'win32' && !displayAvailable()) {
+    return { ok: false, reason: '这台 Windows 上的夜班在后台运行（没人登录也能干活），没有屏幕可以截；Bot 的浏览器在后台无界面运行。' };
+  }
   if (process.platform === 'win32') {
     const script = [
       'Add-Type -AssemblyName System.Windows.Forms,System.Drawing;',
