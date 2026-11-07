@@ -159,6 +159,9 @@ async function seedHome(target) {
       if (err.code !== 'ENOENT') throw err;
     }
   }
+  // The product ships one bot. The roster, group and grant scenarios need a
+  // few specialists, so they come from test fixtures, never from config/.
+  await fsp.cp(path.join(REPO, 'scripts', 'fixtures', 'bots'), path.join(target, 'config', 'bots'), { recursive: true });
   // data/ is created by the server itself; do not copy the real one.
 }
 
@@ -2607,6 +2610,17 @@ function shanghaiWeekday(ts) {
     check('no unguarded listener wiring for removed elements', missing.length === 0, `missing: ${missing.join(', ')}`);
   }
 
+
+  // The product ships ONE bot that can do everything; specialists are created
+  // on demand. Old installs keep their bots, but an untouched "总管" is renamed.
+  {
+    const seeded = (await fsp.readdir(new URL('../config/bots/', import.meta.url))).filter((n) => n.endsWith('.json'));
+    check('config ships exactly one bot', seeded.length === 1 && seeded[0] === 'chief.json', seeded.join(','));
+    const seed = JSON.parse(await fsp.readFile(new URL('../config/bots/chief.json', import.meta.url), 'utf8'));
+    const needed = ['shell', 'fs_write', 'fs_delete', 'browser_open', 'http_fetch', 'bot_create', 'group_create', 'routine_create', 'settings_update', 'ui_set'];
+    check('the one bot is granted every capability', needed.every((n) => seed.tools.includes(n)), needed.filter((n) => !seed.tools.includes(n)).join(','));
+    check('the one bot is called 助理', seed.name === '助理' && seed.primary === true);
+  }
 
   // One machine concept: the old "看谁的屏幕" take-over list must not come back.
   {

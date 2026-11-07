@@ -2326,7 +2326,7 @@
           <button class="av chat-avatar" id="chat-avatar" type="button" aria-label="更换头像" title="更换头像"><span class="av-face"></span></button>
           <div class="stack chat-stack" id="chat-stack" role="group" aria-label="群成员" hidden></div>
           <div class="chat-title-text">
-            <div class="title" id="chat-title">总管</div>
+            <div class="title" id="chat-title">助理</div>
             <div class="sub" id="chat-sub">协调者</div>
           </div>
         </div>
@@ -2351,7 +2351,7 @@
 
       <div class="composer">
         <div class="composer-box">
-          <textarea id="composer" rows="1" placeholder="给总管发消息…" aria-label="消息"></textarea>
+          <textarea id="composer" rows="1" placeholder="告诉助理要做什么…" aria-label="消息"></textarea>
           <button class="send-btn" id="send-btn" title="发送（Enter）" aria-label="发送">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
           </button>
@@ -5066,7 +5066,7 @@ function connectStream() {
 /* ---------------------------------------------------------------------
    UI state reported to the server, and commands coming back from the
    primary bot. The browser owns the real state (localStorage); the server's
-   copy exists so "总管，把主题换成浅色" has something to read and a channel
+   copy exists so "助理，把主题换成浅色" has something to read and a channel
    to answer on.
    --------------------------------------------------------------------- */
 let uiReportTimer = null;
@@ -5132,7 +5132,7 @@ function applyUiCommand(patch = {}) {
   }
 
   if (touched) {
-    toast('总管已调整界面');
+    toast('助理已调整界面');
     reportUiState();
   }
 }

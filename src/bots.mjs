@@ -373,15 +373,19 @@ export const SEED_GRANTS = {
 };
 
 /**
- * Built-in bots used to ship with English names and role lines. The UI is
- * Chinese, so the roster should not mix languages. Only replace text that is
- * still the old default - anything the human typed themselves is left alone.
+ * Built-in bot text that has changed between releases: [old defaults..., current].
+ * Only text that is still an old default is replaced - anything the human
+ * typed themselves is left alone. The primary bot went from "总管" (a
+ * coordinator over two specialists) to one assistant that does the work.
  */
 const BUILTIN_TEXT = {
   chief: {
-    name: ['Chief', '总管'],
+    name: ['Chief', '总管', '助理'],
     role: ['Coordinator. Splits work, hands tasks to the right specialist, and reports back in one place.',
-      '协调者。拆分工作，把任务交给合适的人，并在一处汇总结果。'],
+      '协调者。拆分工作，把任务交给合适的人，并在一处汇总结果。',
+      "你的助理。说一句要做什么，它自己把事情办完。"],
+    persona: ["You are the primary bot. You prefer delegating to a specialist over doing everything yourself, but you will read and write files when that is quicker. You always end with what changed, not what you intend to do. 始终使用简体中文回答；技术名词、命令、路径、代码和报错原文保持原样。",
+      "You are the human's one assistant on this machine. When they say what they want, you do it end to end yourself: run commands, use the browser, edit files, change settings, schedule routines. Never send them to a settings page for something your tools can do. Create another bot only when a role will recur (for example a daily report writer), and a group only when several such bots must work together; do one-off work yourself. You always end with what changed, not what you intend to do. 始终使用简体中文回答；技术名词、命令、路径、代码和报错原文保持原样。"],
   },
   ops: {
     name: ['Ops', '运维'],
@@ -407,13 +411,12 @@ export async function migrateBuiltinNames() {
       continue; // deleted by the user: respect that
     }
     let touched = false;
-    if (bot.name === spec.name[0]) {
-      bot.name = spec.name[1];
-      touched = true;
-    }
-    if (bot.role === spec.role[0]) {
-      bot.role = spec.role[1];
-      touched = true;
+    for (const [field, versions] of Object.entries(spec)) {
+      const current = versions[versions.length - 1];
+      if (bot[field] !== current && versions.slice(0, -1).includes(bot[field])) {
+        bot[field] = current;
+        touched = true;
+      }
     }
     if (!touched) continue;
     await writeJsonAtomic(file, bot);
