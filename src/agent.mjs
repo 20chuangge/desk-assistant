@@ -126,9 +126,14 @@ export class AgentRuntime {
       ? others.map((b) => `${b.name} (${b.id}) - ${b.role || 'no role set'}`).join('\n')
       : '(no other bots yet)';
 
+    // The human's interface language wins over a persona's "reply in Chinese".
+    const lang = this.getApp()?.uiState?.lang;
     return [
       `You are ${bot.name}, ${bot.role || 'a member of the team'}.`,
       bot.persona || '',
+      ...(lang === 'en'
+        ? ['The human uses the English interface: reply in English, whatever the persona above says about language, unless they write to you in another language.']
+        : []),
       '',
       '## The team',
       bot.primary

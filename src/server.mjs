@@ -271,6 +271,7 @@ export async function createAssistant({ port = DEFAULT_PORT, host = HOST } = {})
   function cleanUiPatch(patch = {}) {
     const clean = {};
     if (UI_THEMES.has(patch.theme)) clean.theme = patch.theme;
+    if (patch.lang === 'en' || patch.lang === 'zh') clean.lang = patch.lang;
     if (UI_TZ_MODES.has(patch.timezoneMode)) clean.timezoneMode = patch.timezoneMode;
     if (typeof patch.timezone === 'string') clean.timezone = patch.timezone.slice(0, 64);
     if (typeof patch.panelOpen === 'boolean') clean.panelOpen = patch.panelOpen;

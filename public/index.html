@@ -28,6 +28,120 @@
     } catch { /* private mode: keep the dark default */ }
   })();
 </script>
+<script src="i18n-en.js"></script>
+<script>
+  /* -------------------------------------------------------------------
+     Language. The UI is written in Chinese; English comes from
+     i18n-en.js, keyed by the Chinese text. With English on, an observer
+     translates every text node and title / placeholder / aria-label as
+     it appears, so dynamic UI needs no per-call wiring. Conversation
+     content (bubbles, inputs, code) is never touched.
+     ------------------------------------------------------------------- */
+  (() => {
+    const KEY = 'desk.lang';
+    let pref = 'system';
+    try { pref = localStorage.getItem(KEY) || 'system'; } catch { /* private mode */ }
+    const lang = pref === 'zh' || pref === 'en' ? pref : (/^zh/i.test(navigator.language || '') ? 'zh' : 'en');
+    document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+
+    const CJK = /[一-鿿]/;
+    const exact = new Map();
+    const patterns = [];
+    const dict = window.DESK_I18N_EN || {};
+    const norm = (text) => text.replace(/\s+/g, ' ').trim();
+    for (const [zh, en] of Object.entries(dict)) {
+      const parts = zh.split(/\{(\d)\}/);
+      if (parts.length === 1) { exact.set(zh, en); continue; }
+      let source = '^';
+      const order = [];
+      parts.forEach((part, i) => {
+        if (i % 2) { source += '(.*?)'; order.push(Number(part)); }
+        else source += part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      });
+      // Most specific first: more literal text = fewer false matches.
+      patterns.push({ re: new RegExp(`${source}$`), order, en, weight: zh.replace(/\{\d\}/g, '').length });
+    }
+    patterns.sort((a, b) => b.weight - a.weight);
+
+    const cache = new Map();
+    function t(text) {
+      if (lang !== 'en' || !text || !CJK.test(text)) return text;
+      const key = norm(text);
+      if (cache.has(key)) return cache.get(key);
+      let out = exact.get(key);
+      if (out === undefined) {
+        for (const p of patterns) {
+          const m = p.re.exec(key);
+          if (!m) continue;
+          const values = [];
+          p.order.forEach((slot, i) => { values[slot] = m[i + 1]; });
+          out = p.en.replace(/\{(\d)\}/g, (_, slot) => t(values[Number(slot)] || ''));
+          break;
+        }
+      }
+      if (out === undefined) out = text;
+      cache.set(key, out);
+      return out;
+    }
+
+    const SKIP = '.bubble:not(.system), textarea, input, pre, code, .tech-pre, .mem-pre, .no-i18n, #pc-vnc-wrap';
+    const ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
+    function fixText(node) {
+      const parent = node.parentElement;
+      if (!parent || parent.closest(SKIP) || parent.closest('script, style')) return;
+      const before = node.nodeValue;
+      if (!CJK.test(before)) return;
+      const after = t(before);
+      if (after !== before) {
+        const lead = before.match(/^\s*/)[0];
+        const tail = before.match(/\s*$/)[0];
+        node.nodeValue = lead + after + tail;
+      }
+    }
+    function fixAttrs(el) {
+      if (el.closest && el.closest('.bubble:not(.system), #pc-vnc-wrap')) return;
+      for (const name of ATTRS) {
+        const v = el.getAttribute && el.getAttribute(name);
+        if (v && CJK.test(v)) {
+          const nv = t(v);
+          if (nv !== v) el.setAttribute(name, nv);
+        }
+      }
+    }
+    function fixTree(root) {
+      if (root.nodeType === 3) { fixText(root); return; }
+      if (root.nodeType !== 1) return;
+      fixAttrs(root);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (n.nodeType === 3) fixText(n);
+        else fixAttrs(n);
+      }
+    }
+
+    window.deskI18n = {
+      lang,
+      pref,
+      t,
+      setPref(next) {
+        try { localStorage.setItem(KEY, next); } catch { /* private mode */ }
+        location.reload();
+      },
+    };
+    if (lang !== 'en') return;
+    document.title = t(document.title);
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'characterData') fixText(m.target);
+        else if (m.type === 'attributes') fixAttrs(m.target);
+        else m.addedNodes.forEach(fixTree);
+      }
+    }).observe(document.documentElement, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS,
+    });
+    document.addEventListener('DOMContentLoaded', () => fixTree(document.body));
+  })();
+</script>
 <style>
   /* =====================================================================
      Desk - one file, no framework, no webfonts, no CDN, no build step.
@@ -2612,6 +2726,14 @@
 
       <section class="dsec" id="sec-appearance">
         <div class="dsec-head">外观</div>
+        <div class="dsec-head" style="font-size:13px;margin-bottom:8px">语言</div>
+        <div class="seg" id="lang-seg" role="radiogroup" aria-label="界面语言">
+          <button class="seg-btn" type="button" data-lang-choice="zh" role="radio" aria-checked="false">中文</button>
+          <button class="seg-btn" type="button" data-lang-choice="en" role="radio" aria-checked="false">English</button>
+          <button class="seg-btn" type="button" data-lang-choice="system" role="radio" aria-checked="false">跟随系统</button>
+        </div>
+        <div class="row-note">切换语言后界面会重新加载；助手也会改用这种语言回复。</div>
+        <div class="dsec-head" style="font-size:13px;margin:20px 0 8px">界面主题</div>
         <div class="seg" id="theme-seg" role="radiogroup" aria-label="界面主题">
           <button class="seg-btn" type="button" data-theme-choice="dark" role="radio" aria-checked="false">深色</button>
           <button class="seg-btn" type="button" data-theme-choice="light" role="radio" aria-checked="false">浅色</button>
@@ -2932,6 +3054,14 @@ function applyTheme(pref, { persist = false } = {}) {
   if ($('theme-btn-glyph')) $('theme-btn-glyph').textContent = THEME_GLYPHS[next];
   if ($('theme-btn-label')) $('theme-btn-label').textContent = THEME_LABELS[next];
   if ($('theme-btn')) $('theme-btn').title = `外观：${THEME_LABELS[next]}（点击切换）`;
+  document.querySelectorAll('[data-lang-choice]').forEach((node) => {
+    const on = node.dataset.langChoice === (window.deskI18n?.pref || 'system');
+    node.classList.toggle('active', on);
+    node.setAttribute('aria-checked', on ? 'true' : 'false');
+    node.addEventListener('click', () => {
+      if (node.dataset.langChoice !== window.deskI18n?.pref) window.deskI18n?.setPref(node.dataset.langChoice);
+    });
+  });
   document.querySelectorAll('[data-theme-choice]').forEach((node) => {
     const on = node.dataset.themeChoice === next;
     node.classList.toggle('active', on);
@@ -5232,6 +5362,7 @@ function reportUiState() {
       body: {
         patch: {
           theme: themePref(),
+          lang: window.deskI18n?.lang || 'zh',
           timezoneMode: pref.mode,
           timezone: effectiveTimezone(),
           machine: {
@@ -7435,7 +7566,9 @@ function wireChrome() {
           role: $('new-bot-role').value.trim(),
           // UI-level language rule: the backend has no locale switch yet, so
           // the persona is where "always answer in Chinese" lives.
-          persona: '始终使用简体中文回答。技术名词、命令、路径、代码和报错原文保持原样。',
+          persona: window.deskI18n?.lang === 'en'
+            ? 'Always reply in English. Keep technical terms, commands, paths, code and error text as they are.'
+            : '始终使用简体中文回答。技术名词、命令、路径、代码和报错原文保持原样。',
         },
       });
       state.bots = await api('/api/bots');
