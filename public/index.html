@@ -2224,13 +2224,6 @@
     --bubble-user-border: rgba(106, 76, 255, 0.14);
     --bubble-user-text: #221a4d;
   }
-  @media (prefers-color-scheme: light) {
-    html:not([data-theme]) {
-      --bubble-user: #eeeaff;
-      --bubble-user-border: rgba(106, 76, 255, 0.14);
-      --bubble-user-text: #221a4d;
-    }
-  }
 
   .sidebar-bottom { padding: 8px 10px calc(10px + var(--safe-b)); border-top: 0; }
   .side-actions { display: block; }
@@ -2251,14 +2244,84 @@
   }
   .row.assistant .bubble,
   html[data-theme="light"] .row.assistant .bubble {
-    background: transparent; border-color: transparent; box-shadow: none;
-    padding: 2px 0; max-width: 100%; border-radius: 0;
+    background: var(--bubble-bot); color: var(--text);
+    border: 1px solid var(--bubble-bot-border);
+    border-radius: 18px 18px 18px 6px; padding: 10px 15px;
+    max-width: min(680px, 86%); box-shadow: var(--bubble-shadow);
+  }
+  .row.assistant .bubble.system,
+  html[data-theme="light"] .row.assistant .bubble.system {
+    background: transparent; border-color: transparent; box-shadow: none; padding: 0 1px;
   }
 
   .tabs { gap: 2px; }
   .tabs .tab { flex: 0 0 auto; padding-left: 14px; padding-right: 14px; }
   .tabs .panel-close { margin-left: auto; }
   #sec-skills .section-head, #sec-memory .section-head { margin-top: 4px; }
+
+  /* =====================================================================
+     v6: softer surfaces, framed conversation, settings as pages
+     Dark is a deep graphite, not black; light is a soft grey paper, not
+     white. Both bubble sides are framed, like a messaging app.
+     ===================================================================== */
+  :root {
+    --bg: #16171b;
+    --bg-2: #1b1c21;
+    --panel: #212228;
+    --panel-2: #282930;
+    --panel-3: #31323a;
+    --border: #34353d;
+    --border-soft: #2a2b32;
+    --border-strong: #474953;
+    --text: #ececf1;
+    --muted: #a8a9b3;
+    --dim: #777985;
+    --accent: #ececf1;
+    --accent-2: #d6d6de;
+    --bubble-bot: #23242b;
+    --bubble-bot-border: #2f3038;
+    --bubble-user: #34305a;
+    --bubble-user-border: rgba(170, 155, 255, 0.22);
+    --bubble-user-text: #f0eeff;
+    --bubble-shadow: none;
+  }
+  html[data-theme="light"] {
+    --bg: #f2f3f5;
+    --bg-2: #eaecef;
+    --panel: #f8f9fa;
+    --panel-2: #e6e8ec;
+    --panel-3: #dcdfe4;
+    --border: #d8dbe0;
+    --border-soft: #e1e4e8;
+    --border-strong: #c2c6cd;
+    --text: #1d1e22;
+    --muted: #5b5e67;
+    --dim: #888b94;
+    --accent: #1d1e22;
+    --accent-2: #3a3c43;
+    --bubble-bot: #fbfbfc;
+    --bubble-bot-border: #e0e3e8;
+    --bubble-user: #e5e0fb;
+    --bubble-user-border: rgba(106, 76, 255, 0.16);
+    --bubble-user-text: #241c50;
+    --bubble-shadow: 0 1px 2px rgba(20, 24, 40, 0.04);
+  }
+
+  /* settings: one page at a time */
+  #settings-scroll > .dsec { display: none; border-top: 0; margin-top: 0; padding-top: 0; }
+  #settings-scroll > .dsec.active { display: block; }
+  #settings-scroll > .dsec > .dsec-head:first-child { font-size: 16px; margin-bottom: 14px; }
+
+  /* the chat name opens its details */
+  .chat-title-text { cursor: pointer; border-radius: 8px; padding: 2px 6px; margin: -2px -6px; }
+  .chat-title-text:hover { background: var(--panel-2); }
+
+  /* avatars: calmer picker */
+  .avatar-preview { background: var(--bg-2); }
+  .shape-btn { background: var(--bg-2); border-color: transparent; }
+  .shape-btn.active { background: var(--panel-2); border-color: var(--border-strong); box-shadow: none; }
+  .swatch { width: 30px; height: 30px; box-shadow: none; }
+  .swatch.active { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg) inset; }
 </style>
 </head>
 <body>
@@ -2625,6 +2688,7 @@
     <div class="modal-note" id="group-note" hidden></div>
   </div>
   <div class="modal-foot">
+    <button class="btn danger" id="group-delete" type="button" hidden>删除群组</button>
     <button class="btn" id="group-cancel" type="button">取消</button>
     <button class="btn primary" id="group-create" type="button">创建群组</button>
   </div>
@@ -3138,52 +3202,67 @@ function blobPath(steps = 160) {
   return `M${pts.join(' L')} Z`;
 }
 
+/** A regular polygon with rounded corners (quadratic joins), centred at 50,50. */
+function roundedPolygon(sides, radius, corner, rotate = -90) {
+  const pts = [];
+  for (let i = 0; i < sides; i += 1) {
+    const a = ((rotate + (360 / sides) * i) * Math.PI) / 180;
+    pts.push([50 + radius * Math.cos(a), 50 + radius * Math.sin(a)]);
+  }
+  const lerp = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+  const side = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
+  const t = Math.min(0.45, corner / side);
+  let d = '';
+  for (let i = 0; i < sides; i += 1) {
+    const prev = pts[(i + sides - 1) % sides];
+    const cur = pts[i];
+    const next = pts[(i + 1) % sides];
+    const a = lerp(cur, prev, t);
+    const b = lerp(cur, next, t);
+    d += `${i ? ' L' : 'M'}${a[0].toFixed(1)},${a[1].toFixed(1)} Q${cur[0].toFixed(1)},${cur[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}`;
+  }
+  return `${d} Z`;
+}
+
+/* The picker shows a short, calm set. Older shapes (picker:false) still
+   render for bots that use them, drawn as their nearest calm sibling. */
 const AVATAR_SHAPES = [
   { id: 'squircle', label: '方圆', path: 'M30,3 H70 C85,3 97,15 97,30 V70 C97,85 85,97 70,97 H30 C15,97 3,85 3,70 V30 C3,15 15,3 30,3 Z' },
   { id: 'circle', label: '圆形', path: 'M50,3 A47,47 0 1 1 49.99,3 Z' },
   { id: 'blob', label: '有机', path: blobPath() },
-  { id: 'star', label: '星形', path: 'M50,2 L62.3,33.0 L95.7,35.2 L70.0,56.5 L78.2,88.8 L50,71 L21.8,88.8 L30.0,56.5 L4.3,35.2 L37.7,33.0 Z' },
-  { id: 'flower', label: '花朵', path: rosettePath(8, 34, 14) },
-  { id: 'hex', label: '六边', path: 'M27,4 H73 L98,50 L73,96 H27 L2,50 Z' },
-  { id: 'octagon', label: '八边', path: 'M30,3 H70 L97,30 V70 L70,97 H30 L3,70 V30 Z' },
-  { id: 'diamond', label: '菱形', path: 'M50,2 L98,50 L50,98 L2,50 Z' },
+  { id: 'star', label: '星芒', path: rosettePath(5, 40, 8) },
+  { id: 'flower', label: '花瓣', path: rosettePath(6, 41, 6) },
+  { id: 'hex', label: '六边', path: roundedPolygon(6, 49, 14, 0) },
+  { id: 'octagon', label: '八边', picker: false, path: roundedPolygon(8, 49, 10, -22.5) },
+  { id: 'diamond', label: '菱形', path: roundedPolygon(4, 50, 16) },
   { id: 'arch', label: '拱形', path: 'M5,98 V47 A45,45 0 0 1 95,47 V98 Z' },
   { id: 'leaf', label: '叶片', path: 'M12,88 C12,44 40,12 88,12 C88,56 60,88 12,88 Z' },
-  { id: 'gem', label: '宝石', path: 'M28,10 H72 L96,40 L50,96 L4,40 Z' },
-  { id: 'wave', label: '波浪', path: 'M4,24 C4,12 12,4 24,4 H76 C88,4 96,12 96,24 V80 C86,90 72,94 58,88 C46,83 36,94 24,94 C15,94 8,88 4,82 Z' },
-  { id: 'ring', label: '圆环', path: 'M50,2 A48,48 0 1 1 49.99,2 Z M50,88 A6.5,6.5 0 1 0 50.01,88 Z' },
+  { id: 'gem', label: '宝石', picker: false, path: 'M28,10 H72 L96,40 L50,96 L4,40 Z' },
+  { id: 'wave', label: '波浪', picker: false, path: 'M4,24 C4,12 12,4 24,4 H76 C88,4 96,12 96,24 V80 C86,90 72,94 58,88 C46,83 36,94 24,94 C15,94 8,88 4,82 Z' },
+  { id: 'ring', label: '圆环', picker: false, path: 'M50,2 A48,48 0 1 1 49.99,2 Z M50,88 A6.5,6.5 0 1 0 50.01,88 Z' },
   { id: 'drop', label: '水滴', path: 'M50,3 C50,3 88,44 88,62 C88,82 71,98 50,98 C29,98 12,82 12,62 C12,44 50,3 50,3 Z' },
-  { id: 'chip', label: '芯片', path: 'M20,8 H80 C87,8 92,13 92,20 V80 C92,87 87,92 80,92 H20 C13,92 8,87 8,80 V20 C8,13 13,8 20,8 Z M21,-4 H36 V19 H21 Z M64,-4 H79 V19 H64 Z M21,81 H36 V104 H21 Z M64,81 H79 V104 H64 Z' },
+  { id: 'chip', label: '芯片', picker: false, path: 'M20,8 H80 C87,8 92,13 92,20 V80 C92,87 87,92 80,92 H20 C13,92 8,87 8,80 V20 C8,13 13,8 20,8 Z M21,-4 H36 V19 H21 Z M64,-4 H79 V19 H64 Z M21,81 H36 V104 H21 Z M64,81 H79 V104 H64 Z' },
 ];
 
+/* Muted, slightly dusty tones: they sit well on both themes and never shout. */
 const AVATAR_COLORS = [
-  '#8b5cf6', '#6366f1', '#0ea5e9', '#14b8a6', '#22c55e',
-  '#eab308', '#f97316', '#ef4444', '#ec4899', '#64748b',
+  '#7c6cf0', '#5b7bea', '#3d9be0', '#2bab9c', '#4cae6e',
+  '#d79b3a', '#e0744f', '#d65c7a', '#a46ad8', '#6b7280',
 ];
 
-const AVATAR_DEFAULT = { shape: 'squircle', color: '#8b5cf6' };
+const AVATAR_DEFAULT = { shape: 'squircle', color: '#7c6cf0' };
 const SHAPE_IDS = new Set(AVATAR_SHAPES.map((s) => s.id));
+const LEGACY_SHAPES = { octagon: 'hex', gem: 'diamond', wave: 'squircle', ring: 'circle', chip: 'squircle' };
+const PICKER_SHAPES = AVATAR_SHAPES.filter((shape) => shape.picker !== false);
 
 /* ---------------------------------------------------------------------
-   The mascot face. One data-URI SVG per colour, cached, painted *inside*
-   whatever shape mask the avatar uses:
-     - bot colour + a radial vignette (light top-left, darkened rim)
-     - a pebble head, slightly asymmetric, #ffffff -> #c3c7d2 form gradient
-     - an edge-falloff pass and a chin ambient-occlusion pass (clipped)
-     - a soft contact shadow under the chin
-     - a specular blob on the upper left, plus a 1px inner rim light on top
-     - two dark oval eyes, tilted -12 / +12 degrees. No mouth, no letters.
+   The face: the bot's colour as a soft top-lit plate and two rounded eyes.
+   Flat, quiet, legible at 24px. No mouth, no letters, no 3D clay.
    --------------------------------------------------------------------- */
-const FACE_HEAD = 'M50,24.5 C62.5,24 75.5,30.5 79,42 C82.5,53.5 78,65 69,71.5 C60,78 43.5,79 34,74 C24.5,69 19.5,57 21,45 C22.5,33 37.5,25 50,24.5 Z';
-
 const faceCache = new Map();
 
-/** Narrow silhouettes crop a centred face, so the mascot shrinks per shape
- *  while the colour plate stays full-bleed. 1 = no change. */
-const FACE_ZOOM = {
-  star: 0.74, flower: 0.72, leaf: 0.6, gem: 0.86, diamond: 0.9,
-  wave: 0.92, chip: 0.84, ring: 0.8, blob: 0.94, octagon: 0.96, hex: 0.96,
-};
+/** Narrow silhouettes would crop centred eyes; shrink them per shape. */
+const FACE_ZOOM = { star: 0.86, flower: 0.9, leaf: 0.78, diamond: 0.84, drop: 0.92, arch: 0.96 };
 
 function faceSvg(color, zoom = 1) {
   const key = `${String(color || AVATAR_DEFAULT.color).trim().toLowerCase()}@${zoom}`;
@@ -3192,26 +3271,14 @@ function faceSvg(color, zoom = 1) {
   const bg = /^#[0-9a-f]{3,8}$/.test(String(color || '').trim().toLowerCase())
     ? String(color).trim().toLowerCase()
     : AVATAR_DEFAULT.color;
+  const eye = (x) => `<rect x='${x}' y='39' width='8.5' height='15' rx='4.25' fill='#000' opacity='.16' transform='translate(0 1.6)'/>`
+    + `<rect x='${x}' y='39' width='8.5' height='15' rx='4.25' fill='#fff'/>`;
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs>`
-    + `<radialGradient id='v' cx='30%' cy='16%' r='95%'><stop offset='0' stop-color='#fff' stop-opacity='.42'/><stop offset='.55' stop-color='#fff' stop-opacity='0'/><stop offset='1' stop-color='#000' stop-opacity='.44'/></radialGradient>`
-    + `<linearGradient id='h' x1='30%' y1='0%' x2='68%' y2='100%'><stop offset='0' stop-color='#fff'/><stop offset='.55' stop-color='#e8eaf0'/><stop offset='1' stop-color='#c3c7d2'/></linearGradient>`
-    + `<radialGradient id='o' cx='33%' cy='25%' r='88%'><stop offset='.5' stop-color='#000' stop-opacity='0'/><stop offset='1' stop-color='#000' stop-opacity='.3'/></radialGradient>`
-    + `<radialGradient id='g' cx='50%' cy='50%' r='50%'><stop offset='0' stop-color='#fff' stop-opacity='.95'/><stop offset='1' stop-color='#fff' stop-opacity='0'/></radialGradient>`
-    + `<radialGradient id='c' cx='50%' cy='50%' r='50%'><stop offset='0' stop-color='#000' stop-opacity='.5'/><stop offset='1' stop-color='#000' stop-opacity='0'/></radialGradient>`
-    + `<linearGradient id='r' x1='22%' y1='0%' x2='60%' y2='100%'><stop offset='0' stop-color='#fff' stop-opacity='.95'/><stop offset='1' stop-color='#fff' stop-opacity='0'/></linearGradient>`
-    + `<path id='p' d='${FACE_HEAD}'/>`
-    + `<clipPath id='k'><use href='#p'/></clipPath>`
+    + `<linearGradient id='l' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#fff' stop-opacity='.26'/><stop offset='.55' stop-color='#fff' stop-opacity='0'/><stop offset='1' stop-color='#000' stop-opacity='.16'/></linearGradient>`
     + `</defs>`
     + `<rect width='100' height='100' fill='${bg}'/>`
-    + `<rect width='100' height='100' fill='url(#v)'/>`
-    + `<g transform='translate(50 50) scale(${zoom}) translate(-50 -50)'>`
-    + `<ellipse cx='50' cy='81' rx='23' ry='6' fill='url(#c)'/>`
-    + `<use href='#p' fill='url(#h)'/>`
-    + `<g clip-path='url(#k)'><rect width='100' height='100' fill='url(#o)'/><ellipse cx='50' cy='79' rx='27' ry='13' fill='url(#c)'/><ellipse cx='35' cy='34' rx='14' ry='8.5' transform='rotate(-24 35 34)' fill='url(#g)'/></g>`
-    + `<use href='#p' fill='none' stroke='url(#r)' stroke-width='1.6'/>`
-    + `<ellipse cx='41' cy='53' rx='4.2' ry='6' transform='rotate(-12 41 53)' fill='#1b1b22'/>`
-    + `<ellipse cx='59' cy='53' rx='4.2' ry='6' transform='rotate(12 59 53)' fill='#1b1b22'/>`
-    + `</g>`
+    + `<rect width='100' height='100' fill='url(#l)'/>`
+    + `<g transform='translate(50 50) scale(${zoom}) translate(-50 -50)'>${eye(36.5)}${eye(55)}</g>`
     + `</svg>`;
   const url = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
   faceCache.set(key, url);
@@ -3243,7 +3310,8 @@ function installAvatarStyles() {
 /** bot.avatar from the server, with the legacy avatarColor as the fallback. */
 function avatarOf(bot) {
   const raw = (bot && bot.avatar) || {};
-  const shape = SHAPE_IDS.has(raw.shape) ? raw.shape : AVATAR_DEFAULT.shape;
+  const known = SHAPE_IDS.has(raw.shape) ? raw.shape : AVATAR_DEFAULT.shape;
+  const shape = LEGACY_SHAPES[known] || known;
   const color = typeof raw.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color)
     ? raw.color
     : (bot && bot.avatarColor) || AVATAR_DEFAULT.color;
@@ -3420,10 +3488,34 @@ function renderGroups() {
     text.appendChild(el('div', 'bot-preview', preview));
     row.appendChild(text);
 
+    // ⋯ / right-click: the same management a bot row has
+    const more = el('button', 'bot-more', '⋯');
+    more.type = 'button';
+    more.setAttribute('aria-label', `管理 ${group.name || '群组'}`);
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    const menu = el('div', 'menu bot-menu');
+    menu.hidden = true;
+    menu.setAttribute('role', 'menu');
+    const mkItem = (label, action, extra = '') => {
+      const item = el('button', extra, label);
+      item.type = 'button';
+      item.setAttribute('role', 'menuitem');
+      item.addEventListener('click', (event) => { event.stopPropagation(); closeMenus(); action(); });
+      return item;
+    };
+    menu.appendChild(mkItem('编辑群组', () => openGroupModal(group.id)));
+    menu.appendChild(el('div', 'menu-sep'));
+    menu.appendChild(mkItem('删除', () => deleteGroup(group.id), 'danger'));
+    more.addEventListener('click', (event) => { event.stopPropagation(); toggleMenu(menu, more); });
+    row.appendChild(more);
+    row.appendChild(menu);
+
     row.addEventListener('click', () => openGroup(group.id));
     row.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openGroup(group.id); }
     });
+    row.addEventListener('contextmenu', (event) => { event.preventDefault(); toggleMenu(menu, more); });
     list.appendChild(row);
   }
 }
@@ -3447,9 +3539,9 @@ function renderGroupHead(group) {
   $('chat-sub').textContent = coordinator
     ? `${members.length} 位成员 · 协调者 ${coordinator.name}`
     : `${members.length} 位成员`;
-  $('group-members-pill').hidden = false;
-  $('group-members-pill').textContent = `${members.length} 位成员`;
-  if ($('group-delete-btn')) $('group-delete-btn').hidden = false;
+  // Members and delete live in the group's details (click the title).
+  $('group-members-pill').hidden = true;
+  if ($('group-delete-btn')) $('group-delete-btn').hidden = true;
 }
 
 function renderBotHead(bot) {
@@ -3484,8 +3576,12 @@ function settleConfirm(value) {
   if (resolve) resolve(value);
 }
 
-async function deleteCurrentGroup() {
-  const group = groupById(state.groupId);
+function deleteCurrentGroup() {
+  return deleteGroup(state.groupId);
+}
+
+async function deleteGroup(groupId) {
+  const group = groupById(groupId);
   if (!group) return;
   const ok = await askConfirm({
     title: '删除这个群组？',
@@ -3495,13 +3591,19 @@ async function deleteCurrentGroup() {
   if (!ok) return;
   try {
     await api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
-    state.groupId = null;
-    state.groupMessages = [];
+    closeGroupModal();
+    const wasOpen = state.groupId === group.id;
+    if (wasOpen) {
+      state.groupId = null;
+      state.groupMessages = [];
+    }
     await loadGroups();
-    const primary = state.bots.find((b) => b.primary) || state.bots[0];
-    if (primary) await selectBot(primary.id);
-    renderMessages();
-    connectStream();
+    if (wasOpen) {
+      const primary = state.bots.find((b) => b.primary) || state.bots[0];
+      if (primary) await selectBot(primary.id);
+      renderMessages();
+      connectStream();
+    }
     toast('群组已删除');
   } catch (err) {
     if (err.status === 401) return;
@@ -3651,14 +3753,26 @@ function renderGroupItem(item) {
 /* ---------------------------------------------------------------------
    create group
    --------------------------------------------------------------------- */
-function openGroupModal() {
+/** New group, or (with an id) the group's details: name, members, coordinator. */
+function openGroupModal(groupId = null) {
   closeMenus();
   if (!state.groupsSupported) {
     toast('服务端还没有群组接口（404）', true);
     return;
   }
-  state.groupDraft = { name: '', members: [], coordinatorId: null };
-  $('group-name').value = '';
+  const group = groupId ? groupById(groupId) : null;
+  state.groupDraft = group
+    ? {
+      id: group.id,
+      name: group.name || '',
+      members: groupMembers(group).map((b) => b.id),
+      coordinatorId: groupCoordinator(group)?.id || null,
+    }
+    : { name: '', members: [], coordinatorId: null };
+  $('group-title').textContent = group ? '群组详情' : '新建群组';
+  $('group-create').textContent = group ? '保存' : '创建群组';
+  $('group-delete').hidden = !group;
+  $('group-name').value = state.groupDraft.name;
   $('group-note').hidden = true;
   renderGroupModal();
   $('group-modal').classList.add('open');
@@ -3738,6 +3852,26 @@ async function createGroup() {
   if (draft.members.length < 2) { showGroupNote('至少选 2 位成员。'); return; }
   const button = $('group-create');
   button.disabled = true;
+  if (draft.id) {
+    try {
+      await api(`/api/groups/${encodeURIComponent(draft.id)}`, {
+        method: 'PATCH',
+        body: { name, members: draft.members, coordinatorId: draft.coordinatorId || draft.members[0] },
+      });
+      closeGroupModal();
+      await loadGroups();
+      if (state.groupId === draft.id) {
+        const group = groupById(draft.id);
+        if (group) renderGroupHead(group);
+      }
+      toast('群组已保存');
+    } catch (err) {
+      if (err.status !== 401) showGroupNote(`保存失败：${err.message}`);
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   try {
     const res = await api('/api/groups', {
       method: 'POST',
@@ -5875,7 +6009,7 @@ function renderCustomizer() {
 
   const grid = $('shape-grid');
   grid.innerHTML = '';
-  for (const shape of AVATAR_SHAPES) {
+  for (const shape of PICKER_SHAPES) {
     const active = shape.id === a.shape;
     const btn = el('button', `shape-btn${active ? ' active' : ''}`);
     btn.type = 'button';
@@ -6201,10 +6335,16 @@ function formatPairCode(code) {
   return raw;
 }
 
+/** Settings is a set of pages: the left list picks one, only that one shows. */
 function setSettingsNav(sectionId) {
   document.querySelectorAll('.setnav').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.setTarget === sectionId);
   });
+  document.querySelectorAll('#settings-scroll > .dsec').forEach((sec) => {
+    sec.classList.toggle('active', sec.id === sectionId);
+  });
+  const scroller = $('settings-scroll');
+  if (scroller) scroller.scrollTop = 0;
 }
 
 function openSettings(section) {
@@ -6222,7 +6362,6 @@ function openSettings(section) {
   normalizeOverlays();
   const targetId = section || 'sec-model';
   setSettingsNav(targetId);
-  if (section) setTimeout(() => $(section)?.scrollIntoView({ block: 'start' }), 80);
   if (!isMobile() && !section) setTimeout(() => $('set-provider').focus(), 120);
 }
 
@@ -7153,11 +7292,7 @@ function wireChrome() {
   $('settings-close').addEventListener('click', closeSettings);
   $('settings-scrim').addEventListener('click', closeSettings);
   document.querySelectorAll('.setnav').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const target = $(btn.dataset.setTarget);
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setSettingsNav(btn.dataset.setTarget);
-    });
+    btn.addEventListener('click', () => setSettingsNav(btn.dataset.setTarget));
   });
 
   $('mock-banner-btn').addEventListener('click', openSettings);
@@ -7318,6 +7453,13 @@ function wireChrome() {
   $('group-cancel').addEventListener('click', closeGroupModal);
   $('group-scrim').addEventListener('click', closeGroupModal);
   $('group-create').addEventListener('click', createGroup);
+  $('group-delete').addEventListener('click', () => { if (state.groupDraft?.id) deleteGroup(state.groupDraft.id); });
+  // Click the chat's name to open its details (Grok-style): a bot's profile,
+  // or a group's name, members and coordinator.
+  document.querySelector('.chat-title-text')?.addEventListener('click', () => {
+    if (state.groupId) openGroupModal(state.groupId);
+    else if (state.botId) openBotEdit(state.botId);
+  });
   $('group-name').addEventListener('input', (event) => {
     state.groupDraft.name = event.target.value;
     $('group-create').disabled = !(state.groupDraft.name.trim() && state.groupDraft.members.length >= 2);
