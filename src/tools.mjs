@@ -99,11 +99,37 @@ function isPrivateHost(hostname) {
  * Known limitation: with shell:true the child is the shell, so a grandchild
  * process may outlive a kill on Windows. The README lists this.
  */
+/**
+ * Windows consoles default to the ANSI code page (GBK on Chinese Windows), and
+ * reading that as UTF-8 turned every Chinese word into "\uFFFD\uFFFD". The command
+ * runs under "chcp 65001" (UTF-8) first; anything that still writes the local
+ * code page is decoded with it.
+ */
+function windowsAnsiEncoding() {
+  const locale = (() => { try { return Intl.DateTimeFormat().resolvedOptions().locale; } catch { return ''; } })();
+  if (/^zh-(TW|HK|MO)|zh-Hant/i.test(locale)) return 'big5';
+  if (/^zh/i.test(locale)) return 'gbk';
+  if (/^ja/i.test(locale)) return 'shift_jis';
+  if (/^ko/i.test(locale)) return 'euc-kr';
+  return 'windows-1252';
+}
+
+function decodeOutput(buffer) {
+  const utf8 = buffer.toString('utf8');
+  if (process.platform !== 'win32' || !utf8.includes('\uFFFD')) return utf8;
+  try {
+    return new TextDecoder(windowsAnsiEncoding()).decode(buffer);
+  } catch {
+    return utf8;
+  }
+}
+
 function runShellCommand(command, { cwd, timeoutMs, signal, maxOutput = MAX_SHELL_OUTPUT }) {
   return new Promise((resolve) => {
     let settled = false;
-    let stdout = '';
-    let stderr = '';
+    // Raw bytes, decoded once at the end: a multi-byte character may be split
+    // across chunks, and the right decoder is only known for the whole output.
+    const out = { stdout: [], stderr: [], bytes: { stdout: 0, stderr: 0 } };
     let truncated = false;
     let timedOut = false;
 
@@ -118,25 +144,27 @@ function runShellCommand(command, { cwd, timeoutMs, signal, maxOutput = MAX_SHEL
     const env = { ...process.env };
     delete env.ASSIST_API_KEY;
 
-    const child = spawn(command, {
+    const child = spawn(process.platform === 'win32' ? `chcp 65001 >nul & ${command}` : command, {
       shell: true,
       cwd,
       windowsHide: true,
       env,
     });
 
+    // maxOutput is in characters; 4 bytes per character is the UTF-8 worst case.
+    const maxBytes = maxOutput * 4;
     const append = (which, chunk) => {
-      const text = chunk.toString('utf8');
-      const bucket = which === 'stdout' ? stdout : stderr;
-      if (bucket.length >= maxOutput) {
-        truncated = true;
-        return;
-      }
-      const room = maxOutput - bucket.length;
-      const slice = text.slice(0, room);
-      if (slice.length < text.length) truncated = true;
-      if (which === 'stdout') stdout += slice;
-      else stderr += slice;
+      const room = maxBytes - out.bytes[which];
+      if (room <= 0) { truncated = true; return; }
+      const slice = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      if (slice.length < chunk.length) truncated = true;
+      out[which].push(slice);
+      out.bytes[which] += slice.length;
+    };
+    const text = (which) => {
+      const decoded = decodeOutput(Buffer.concat(out[which]));
+      if (decoded.length > maxOutput) truncated = true;
+      return decoded;
     };
 
     child.stdout.on('data', (c) => append('stdout', c));
@@ -162,7 +190,7 @@ function runShellCommand(command, { cwd, timeoutMs, signal, maxOutput = MAX_SHEL
     }
 
     child.on('error', (err) => {
-      finish({ ok: false, error: { code: 'SHELL_SPAWN_FAILED', message: err.message }, stdout, stderr, timedOut });
+      finish({ ok: false, error: { code: 'SHELL_SPAWN_FAILED', message: err.message }, stdout: text('stdout'), stderr: text('stderr'), timedOut });
     });
 
     child.on('close', (code, sig) => {
@@ -172,8 +200,8 @@ function runShellCommand(command, { cwd, timeoutMs, signal, maxOutput = MAX_SHEL
         exitCode: code,
         signal: sig || null,
         timedOut,
-        stdout: truncate(stdout, maxOutput).text,
-        stderr: truncate(stderr, maxOutput).text,
+        stdout: truncate(text('stdout'), maxOutput).text,
+        stderr: truncate(text('stderr'), maxOutput).text,
         truncated,
         command,
         cwd,
